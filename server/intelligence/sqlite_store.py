@@ -1,6 +1,10 @@
 import sqlite3
 import os
+import logging
 import traceback
+from contextlib import contextmanager
+
+logger = logging.getLogger(__name__)
 
 class SQLiteStore:
     def __init__(self, db_path="./securerag.db"):
@@ -11,14 +15,35 @@ class SQLiteStore:
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
         conn.row_factory = sqlite3.Row
         return conn
+
+    @contextmanager
+    def transaction(self):
+        """Yield a single connection whose writes commit atomically.
+
+        All work performed inside the ``with`` block shares one connection and
+        one transaction: it commits on clean exit and rolls back if any
+        exception propagates. Pass the yielded connection to the ``store_*``
+        methods via their ``conn=`` argument so they enlist in this transaction
+        instead of committing independently.
+        """
+        conn = self.get_connection()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_db(self):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
-            
+
             # 1. Core Event Table
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS log_chunks (
@@ -89,7 +114,7 @@ class SQLiteStore:
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
             """)
-            
+
             # 7. Users (Authentication & RBAC)
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -110,84 +135,116 @@ class SQLiteStore:
 
             conn.commit()
             conn.close()
-            print(f"Initialized SQLite SIEM Store at {self.db_path}")
+            logger.info("Initialized SQLite SIEM Store at %s", self.db_path)
         except Exception as e:
-            print(f"Error initializing SQLite: {e}")
+            logger.error("Error initializing SQLite: %s", e)
             traceback.print_exc()
 
-    def store_log_chunk(self, chunk_id, upload_id, source_file, raw_text):
+    def store_log_chunk(self, chunk_id, upload_id, source_file, raw_text, conn=None):
+        managed = conn is None
+        own_conn = None
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            conn.execute("""
             INSERT OR IGNORE INTO log_chunks (chunk_id, upload_id, source_file, raw_text)
             VALUES (?, ?, ?, ?)
             """, (chunk_id, upload_id, source_file, raw_text))
-            conn.commit()
-            conn.close()
+            if managed:
+                conn.commit()
         except Exception as e:
-            print(f"Error storing log chunk in SQLite: {e}")
+            logger.error("Error storing log chunk in SQLite: %s", e)
+            if not managed:
+                raise
+        finally:
+            if own_conn is not None:
+                own_conn.close()
 
-    def store_ioc(self, ioc_value, ioc_type, chunk_id, context_role="UNKNOWN"):
+    def store_ioc(self, ioc_value, ioc_type, chunk_id, context_role="UNKNOWN", conn=None):
+        managed = conn is None
+        own_conn = None
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
             # Insert into global ledger
-            cursor.execute("""
+            conn.execute("""
             INSERT OR IGNORE INTO extracted_iocs (ioc_value, ioc_type)
             VALUES (?, ?)
             """, (ioc_value, ioc_type))
-            
+
             # Insert into mapping
-            cursor.execute("""
+            conn.execute("""
             INSERT OR IGNORE INTO chunk_ioc_mapping (chunk_id, ioc_value, context_role)
             VALUES (?, ?, ?)
             """, (chunk_id, ioc_value, context_role))
-            
-            conn.commit()
-            conn.close()
+
+            if managed:
+                conn.commit()
         except Exception as e:
-            print(f"Error storing IOC in SQLite: {e}")
+            logger.error("Error storing IOC in SQLite: %s", e)
+            if not managed:
+                raise
+        finally:
+            if own_conn is not None:
+                own_conn.close()
 
     def update_ioc_role(self, chunk_id, ioc_value, context_role):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute("""
-            UPDATE chunk_ioc_mapping 
-            SET context_role = ? 
+            UPDATE chunk_ioc_mapping
+            SET context_role = ?
             WHERE chunk_id = ? AND ioc_value = ?
             """, (context_role, chunk_id, ioc_value))
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"Error updating IOC role in SQLite: {e}")
+            logger.error("Error updating IOC role in SQLite: %s", e)
 
-    def store_mitre_mapping(self, chunk_id, technique_id, tactic, confidence):
+    def store_mitre_mapping(self, chunk_id, technique_id, tactic, confidence, conn=None):
+        managed = conn is None
+        own_conn = None
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            conn.execute("""
             INSERT INTO chunk_mitre_mapping (chunk_id, technique_id, tactic, confidence)
             VALUES (?, ?, ?, ?)
             """, (chunk_id, technique_id, tactic, confidence))
-            conn.commit()
-            conn.close()
+            if managed:
+                conn.commit()
         except Exception as e:
-            print(f"Error storing MITRE in SQLite: {e}")
+            logger.error("Error storing MITRE in SQLite: %s", e)
+            if not managed:
+                raise
+        finally:
+            if own_conn is not None:
+                own_conn.close()
 
-    def store_timeline_event(self, chunk_id, event_timestamp, event_description, severity):
+    def store_timeline_event(self, chunk_id, event_timestamp, event_description, severity, conn=None):
+        managed = conn is None
+        own_conn = None
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            conn.execute("""
             INSERT INTO timeline_events (chunk_id, event_timestamp, event_description, severity)
             VALUES (?, ?, ?, ?)
             """, (chunk_id, event_timestamp, event_description, severity))
-            conn.commit()
-            conn.close()
+            if managed:
+                conn.commit()
         except Exception as e:
-            print(f"Error storing timeline event in SQLite: {e}")
+            logger.error("Error storing timeline event in SQLite: %s", e)
+            if not managed:
+                raise
+        finally:
+            if own_conn is not None:
+                own_conn.close()
 
     def check_file_exists(self, file_hash):
         try:
@@ -198,21 +255,29 @@ class SQLiteStore:
             conn.close()
             return row["upload_id"] if row else None
         except Exception as e:
-            print(f"Error checking file_hash: {e}")
+            logger.error("Error checking file_hash: %s", e)
             return None
 
-    def store_file_upload(self, file_hash, upload_id, filename):
+    def store_file_upload(self, file_hash, upload_id, filename, conn=None):
+        managed = conn is None
+        own_conn = None
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            conn.execute("""
             INSERT INTO file_uploads (file_hash, upload_id, filename)
             VALUES (?, ?, ?)
             """, (file_hash, upload_id, filename))
-            conn.commit()
-            conn.close()
+            if managed:
+                conn.commit()
         except Exception as e:
-            print(f"Error storing file upload: {e}")
+            logger.error("Error storing file upload: %s", e)
+            if not managed:
+                raise
+        finally:
+            if own_conn is not None:
+                own_conn.close()
 
     def create_user(self, username, password_hash, role):
         try:
@@ -228,7 +293,7 @@ class SQLiteStore:
         except sqlite3.IntegrityError:
             return False
         except Exception as e:
-            print(f"Error creating user: {e}")
+            logger.error("Error creating user: %s", e)
             return False
 
     def get_user_by_username(self, username):
@@ -240,7 +305,7 @@ class SQLiteStore:
             conn.close()
             return dict(row) if row else None
         except Exception as e:
-            print(f"Error getting user: {e}")
+            logger.error("Error getting user: %s", e)
             return None
 
     def get_all_extracted_iocs(self):
@@ -250,7 +315,7 @@ class SQLiteStore:
             cursor.execute("SELECT ioc_value, ioc_type FROM extracted_iocs")
             rows = cursor.fetchall()
             conn.close()
-            
+
             iocs = {
                 "ips": [],
                 "domains": [],
@@ -266,10 +331,10 @@ class SQLiteStore:
                 elif t == "hash": iocs["hashes"].append(val)
                 elif t == "cve": iocs["cves"].append(val)
                 elif t == "email": iocs["emails"].append(val)
-                
+
             return iocs
         except Exception as e:
-            print(f"Error getting all IOCs: {e}")
+            logger.error("Error getting all IOCs: %s", e)
             return {}
 
     def store_global_correlation(self, correlation_dict):
@@ -286,7 +351,7 @@ class SQLiteStore:
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"Error storing global correlations: {e}")
+            logger.error("Error storing global correlations: %s", e)
 
     def get_global_correlation(self):
         import json
@@ -298,6 +363,5 @@ class SQLiteStore:
             conn.close()
             return {row["ioc_value"]: json.loads(row["correlation_data"]) for row in rows}
         except Exception as e:
-            print(f"Error getting global correlations: {e}")
+            logger.error("Error getting global correlations: %s", e)
             return {}
-

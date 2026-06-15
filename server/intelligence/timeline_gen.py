@@ -1,7 +1,10 @@
 import re
+import logging
 import traceback
 from datetime import datetime
 from intelligence.mitre_mapper import map_to_mitre
+
+logger = logging.getLogger(__name__)
 
 def extract_timestamps(text: str) -> list[dict]:
     try:
@@ -43,7 +46,7 @@ def extract_timestamps(text: str) -> list[dict]:
         
         return events
     except Exception as e:
-        print(f"Error in extract_timestamps: {e}")
+        logger.error("Error in extract_timestamps: %s", e)
         traceback.print_exc()
         return []
 def parse_ts(ts):
@@ -194,13 +197,13 @@ def generate_timeline(log_text: str, mitre_results: list) -> list[dict]:
         # Final timeline order must follow kill chain
         timeline.sort(key=lambda x: parse_ts(x["timestamp"]) or datetime.min)
         
-        print("\n=== TIMELINE DEBUG ===")
+        logger.debug("=== TIMELINE DEBUG ===")
         for t in timeline:
-            print(t["timestamp"], t["event_type"])
-        
+            logger.debug("%s %s", t["timestamp"], t["event_type"])
+
         return timeline
     except Exception as e:
-        print(f"Error in generate_timeline: {e}")
+        logger.error("Error in generate_timeline: %s", e)
         traceback.print_exc()
         return []
 
@@ -242,6 +245,6 @@ def format_timeline_string(timeline: list) -> str:
             
         return "\n".join(result)
     except Exception as e:
-        print(f"Error in format_timeline_string: {e}")
+        logger.error("Error in format_timeline_string: %s", e)
         traceback.print_exc()
         return "Error formatting timeline."

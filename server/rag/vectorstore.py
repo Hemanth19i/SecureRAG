@@ -1,42 +1,44 @@
 import os
 import uuid
 import time
+import logging
 import traceback
 import chromadb
+
+logger = logging.getLogger(__name__)
 
 class VectorStore:
     def __init__(self, persist_directory: str = "./chroma_store"):
         self.persist_directory = persist_directory
         self.client = None
         self.collection = None
-        
+
         try:
             self._init_client()
         except Exception as e:
             if "database is locked" in str(e).lower() or "sqlite" in str(e).lower():
-                print("ChromaDB locked, waiting 2 seconds to retry...")
+                logger.warning("ChromaDB locked, waiting 2 seconds to retry...")
                 time.sleep(2)
                 try:
                     self._init_client()
                 except Exception as retry_e:
-                    print(f"Failed to initialize VectorStore after retry: {retry_e}")
+                    logger.error("Failed to initialize VectorStore after retry: %s", retry_e)
                     traceback.print_exc()
             else:
-                print(f"Error initializing VectorStore: {e}")
+                logger.error("Error initializing VectorStore: %s", e)
                 traceback.print_exc()
 
     def _init_client(self):
-        print("\n=== CHROMA INIT ===")
-        print("Persist directory:", os.path.abspath(self.persist_directory))
+        logger.debug("=== CHROMA INIT ===")
+        logger.debug("Persist directory: %s", os.path.abspath(self.persist_directory))
 
         self.client = chromadb.PersistentClient(path=self.persist_directory)
         self.collection = self.client.get_or_create_collection(
             name="securerag_logs"
         )
 
-        print("Collection name:", self.collection.name)
-        print("Collection count:", self.collection.count())
-        print("===================\n")
+        logger.debug("Collection name: %s", self.collection.name)
+        logger.debug("Collection count: %s", self.collection.count())
 
     def cleanup(self, reset: bool = False):
         """
@@ -50,14 +52,14 @@ class VectorStore:
         try:
             if not self.collection:
                 return False
-            
+
             if not metadata:
                 metadata = [{"chunk_index": i} for i in range(len(chunks))]
-            
+
             if not ids:
                 ids = [f"chunk_{str(uuid.uuid4())}" for i in range(len(chunks))]
 
-            print("Collection count before:", self.collection.count())
+            logger.debug("Collection count before: %s", self.collection.count())
 
             self.collection.add(
                 documents=chunks,
@@ -65,26 +67,24 @@ class VectorStore:
                 metadatas=metadata,
                 ids=ids
             )
-        
-            print("Collection count after:", self.collection.count())
+
+            logger.debug("Collection count after: %s", self.collection.count())
             return True
         except Exception as e:
-            print(f"Error storing embeddings: {e}")
+            logger.error("Error storing embeddings: %s", e)
             traceback.print_exc()
             return False
-       
+
 
     def query_similar(self, query_embedding: list[float], top_k: int = 5):
         try:
             if not self.collection:
                 return {"documents": [], "metadatas": [], "distances": []}
 
-            print("\n=== QUERY_SIMILAR DEBUG ===")
-            print("Collection object:", self.collection)
-            print("Collection name:", self.collection.name)
-            print("Collection count:", self.collection.count())
-            print("Embedding length:", len(query_embedding))
-            print("===========================\n")
+            logger.debug("=== QUERY_SIMILAR DEBUG ===")
+            logger.debug("Collection name: %s", self.collection.name)
+            logger.debug("Collection count: %s", self.collection.count())
+            logger.debug("Embedding length: %s", len(query_embedding))
 
             actual_k = min(top_k, self.collection.count())
             if actual_k == 0:
@@ -98,7 +98,7 @@ class VectorStore:
             return results
 
         except Exception as e:
-            print(f"Error querying similar embeddings: {e}")
+            logger.error("Error querying similar embeddings: %s", e)
             traceback.print_exc()
             return {"documents": [], "metadatas": [], "distances": []}
 
@@ -108,6 +108,6 @@ class VectorStore:
                 return {"documents": [], "metadatas": []}
             return self.collection.get(include=["documents", "metadatas"])
         except Exception as e:
-            print(f"Error getting all chunks: {e}")
+            logger.error("Error getting all chunks: %s", e)
             traceback.print_exc()
             return {"documents": [], "metadatas": []}

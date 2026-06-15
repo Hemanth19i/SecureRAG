@@ -1,4 +1,7 @@
+import logging
 import traceback
+
+logger = logging.getLogger(__name__)
 
 def chunk_text_generator(text: str, chunk_size: int = 500, overlap: int = 50):
     lines = text.split('\n')
@@ -37,6 +40,6 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
             return []
         return list(chunk_text_generator(text, chunk_size, overlap))
     except Exception as e:
-        print(f"Error in chunk_text: {e}")
+        logger.error("Error in chunk_text: %s", e)
         traceback.print_exc()
         return []

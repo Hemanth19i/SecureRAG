@@ -1,5 +1,8 @@
 import re
+import logging
 import traceback
+
+logger = logging.getLogger(__name__)
 
 MITRE_PATTERNS = {
     r"brute force|auth fail|password fail|login fail|failed password": {
@@ -116,7 +119,7 @@ def map_to_mitre(text: str) -> list[dict]:
                     
         return results
     except Exception as e:
-        print(f"Error in map_to_mitre: {e}")
+        logger.error("Error in map_to_mitre: %s", e)
         traceback.print_exc()
         return []
 
@@ -128,6 +131,6 @@ def build_kill_chain(mitre_results: list) -> list[dict]:
         }
         return sorted(mitre_results, key=lambda x: phase_order.get(x.get("phase", ""), 99))
     except Exception as e:
-        print(f"Error in build_kill_chain: {e}")
+        logger.error("Error in build_kill_chain: %s", e)
         traceback.print_exc()
         return []

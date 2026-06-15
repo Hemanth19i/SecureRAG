@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import traceback
 from dotenv import load_dotenv
 load_dotenv()
@@ -14,8 +15,10 @@ class AnalysisSchema(TypedDict):
     threats: list[str]
     recommendations: list[str]
 
+logger = logging.getLogger(__name__)
+
 api_key = os.getenv("GEMINI_API_KEY")
-print("Gemini API Key Loaded:", bool(api_key))
+logger.info("Gemini API Key Loaded: %s", bool(api_key))
 if api_key:
     client = genai.Client(api_key=api_key)
 
@@ -139,7 +142,7 @@ def rule_based_analyze(chunks: list[str], query: str, correlations: dict = None,
 def analyze_threat(query: str, chunks: list[str] = None, correlations: dict = None, mitre: dict = None, timeline: dict = None) -> dict:
     try:
         if not api_key:
-            print("GEMINI_API_KEY not configured. Falling back to rule-based analyzer.")
+            logger.warning("GEMINI_API_KEY not configured. Falling back to rule-based analyzer.")
             return rule_based_analyze(chunks, query, correlations, mitre, timeline)
             
         # 1. Detection of Prompt Injection (Logging only)
@@ -151,7 +154,7 @@ def analyze_threat(query: str, chunks: list[str] = None, correlations: dict = No
         suspected_injection = False
         for keyword in injection_keywords:
             if keyword in query_lower or keyword in context_lower:
-                print(f"WARNING: Suspected prompt injection detected based on keyword '{keyword}'!")
+                logger.warning("Suspected prompt injection detected based on keyword '%s'!", keyword)
                 suspected_injection = True
                 break
 
@@ -210,7 +213,7 @@ Only label an IP as attacker/malicious if it is the SOURCE of attack traffic lik
                 )
             )
         except Exception as e1:
-            print(f"Primary model gemini-2.5-flash failed: {e1}. Falling back to gemini-flash-latest.")
+            logger.warning("Primary model gemini-2.5-flash failed: %s. Falling back to gemini-flash-latest.", e1)
             try:
                 response = client.models.generate_content(
                     model="gemini-flash-latest",
@@ -223,7 +226,7 @@ Only label an IP as attacker/malicious if it is the SOURCE of attack traffic lik
                     )
                 )
             except Exception as e2:
-                print(f"Fallback model gemini-flash-latest failed: {e2}. Falling back to rule-based analyzer.")
+                logger.warning("Fallback model gemini-flash-latest failed: %s. Falling back to rule-based analyzer.", e2)
                 return rule_based_analyze(chunks, query, correlations, mitre, timeline)
 
         text = response.text
@@ -233,9 +236,8 @@ Only label an IP as attacker/malicious if it is the SOURCE of attack traffic lik
         elif text.startswith("```"):
             text = text[3:-3]
 
-        print("\n=== GEMINI RAW RESPONSE ===")
-        print(text)
-        print("===========================\n")
+        logger.debug("=== GEMINI RAW RESPONSE ===")
+        logger.debug("%s", text)
 
         try:
             result = json.loads(text.strip())
@@ -245,16 +247,15 @@ Only label an IP as attacker/malicious if it is the SOURCE of attack traffic lik
             return result
 
         except json.JSONDecodeError as e:
-            print("JSON Parse Error:", e)
-            print("Raw Gemini Response:")
-            print(text)
+            logger.error("JSON Parse Error: %s", e)
+            logger.error("Raw Gemini Response: %s", text)
             return {
                 "error": f"JSON Parse Error: {e}",
                 "raw_response": text
             }
 
     except Exception as e:
-        print(f"Error in analyze_threat: {e}")
+        logger.error("Error in analyze_threat: %s", e)
         traceback.print_exc()
         return {"error": str(e)}
 

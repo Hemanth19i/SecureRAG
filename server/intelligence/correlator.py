@@ -1,7 +1,10 @@
 import re
+import logging
 import traceback
 from datetime import datetime
 from intelligence.ioc_extractor import extract_iocs
+
+logger = logging.getLogger(__name__)
 
 def is_private_ip(ip: str) -> bool:
     if ip.startswith("10.") or ip.startswith("192.168.") or ip.startswith("127."):
@@ -37,7 +40,7 @@ def correlate_iocs(iocs: dict, sqlite_store) -> dict:
         if not all_input_iocs:
             return {}
             
-        print(f"DEBUG [Correlator]: Target IOCs to correlate: {len(all_input_iocs)}")
+        logger.debug("Target IOCs to correlate: %s", len(all_input_iocs))
 
         conn = sqlite_store.get_connection()
         cursor = conn.cursor()
@@ -60,7 +63,7 @@ def correlate_iocs(iocs: dict, sqlite_store) -> dict:
             conn.close()
             return {}
             
-        print(f"DEBUG [Correlator]: Fetched {len(chunk_ids)} related chunks from SQLite.")
+        logger.debug("Fetched %s related chunks from SQLite.", len(chunk_ids))
         
         placeholders_chunks = ','.join(['?'] * len(chunk_ids))
         cursor.execute(f"SELECT chunk_id, raw_text, source_file, timestamp_ingested FROM log_chunks WHERE chunk_id IN ({placeholders_chunks})", chunk_ids)
@@ -224,15 +227,14 @@ def correlate_iocs(iocs: dict, sqlite_store) -> dict:
                 "context_flags": flags
             }
 
-        print("\n=== FINAL CORRELATION RESULT ===")
+        logger.debug("=== FINAL CORRELATION RESULT ===")
         for k, v in result.items():
-            print(f"{k} => {v}")
-        print("================================\n")
+            logger.debug("%s => %s", k, v)
 
         return result
 
     except Exception as e:
-        print(f"Error in correlate_iocs: {e}")
+        logger.error("Error in correlate_iocs: %s", e)
         traceback.print_exc()
         return {}
 
@@ -262,7 +264,7 @@ def generate_analyst_insights(correlations: dict) -> list[str]:
         return insights
 
     except Exception as e:
-        print(f"Error generating analyst insights: {e}")
+        logger.error("Error generating analyst insights: %s", e)
         return []
 
 def get_correlation_summary(correlation: dict) -> list[str]:
@@ -282,5 +284,5 @@ def get_correlation_summary(correlation: dict) -> list[str]:
             
         return summaries
     except Exception as e:
-        print(f"Error in get_correlation_summary: {e}")
+        logger.error("Error in get_correlation_summary: %s", e)
         return ["Error generating correlation summary"]

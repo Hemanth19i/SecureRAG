@@ -1,4 +1,5 @@
 import uuid
+import logging
 import traceback
 from datetime import datetime
 import hashlib
@@ -12,6 +13,8 @@ from intelligence.mitre_mapper import map_to_mitre, build_kill_chain
 from intelligence.timeline_gen import generate_timeline, format_timeline_string, extract_timestamps
 from intelligence.correlator import correlate_iocs, get_correlation_summary, generate_analyst_insights
 
+logger = logging.getLogger(__name__)
+
 api_bp = Blueprint('api', __name__)
 embedder = Embedder()
 
@@ -21,13 +24,12 @@ def debug_chunks():
     claims = get_jwt()
     if claims.get("role") != "ADMIN":
         return jsonify({"error": "Admin privileges required"}), 403
-    
+
     from flask import current_app
 
-    print("\n=== DEBUG CHUNKS ===")
-    print("Collection object:", current_app.vector_store.collection)
-    print("Collection count:", current_app.vector_store.collection.count())
-    print("====================\n")
+    logger.debug("=== DEBUG CHUNKS ===")
+    logger.debug("Collection object: %s", current_app.vector_store.collection)
+    logger.debug("Collection count: %s", current_app.vector_store.collection.count())
 
     all_data = current_app.vector_store.collection.get(
         include=["documents", "metadatas"]
@@ -49,33 +51,33 @@ def upload_log():
         file = request.files.get('file')
         if not file:
             return jsonify({"error": "No file provided"}), 400
-            
+
         text = file.read().decode('utf-8')
-        
+
         # Calculate SHA256 file fingerprint
         file_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
-        
+
         # Check for duplicates
         existing_upload_id = current_app.sqlite_store.check_file_exists(file_hash)
         if existing_upload_id:
             return jsonify({
-                "error": "File already ingested", 
+                "error": "File already ingested",
                 "upload_id": existing_upload_id
             }), 409
-            
+
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         # We need an upload ID for the DB
         upload_id = str(uuid.uuid4())
-        
+
         metadata = {
-            "filename": file.filename, 
-            "source_file": file.filename, 
+            "filename": file.filename,
+            "source_file": file.filename,
             "timestamp": now,
             "upload_id": upload_id
         }
-        
-        
+
+
 # Parse & chunk first (no DB writes yet)
         chunks = chunk_text(text)
         if not chunks:
@@ -102,49 +104,52 @@ def upload_log():
         if not success:
             return jsonify({"error": "Failed to store in ChromaDB"}), 500
 
-        # ChromaDB write succeeded — now safe to populate SQLite analysis tables
+        # ChromaDB write succeeded — now populate the SQLite analysis tables.
+        # All writes for this upload run in a single transaction: if any row
+        # fails, the whole upload is rolled back rather than left half-ingested.
         sqlite = current_app.sqlite_store
-        for i, chunk_text_content in enumerate(chunks):
-            chunk_id = chunk_ids[i]
+        with sqlite.transaction() as conn:
+            for i, chunk_text_content in enumerate(chunks):
+                chunk_id = chunk_ids[i]
 
-            # 1. Store raw chunk
-            sqlite.store_log_chunk(chunk_id, upload_id, file.filename, chunk_text_content)
+                # 1. Store raw chunk
+                sqlite.store_log_chunk(chunk_id, upload_id, file.filename, chunk_text_content, conn=conn)
 
-            # 2. Extract and store IOCs
-            chunk_iocs = extract_iocs(chunk_text_content)
-            for ioc_type, ioc_list in chunk_iocs.items():
-                if ioc_type == "error": continue
-                for ioc_val in ioc_list:
-                    TYPE_MAP = {"ips": "ip", "hashes": "hash", "cves": "cve", "domains": "domain", "emails": "email"}
-                    single_type = TYPE_MAP.get(ioc_type, ioc_type)
-                    sqlite.store_ioc(ioc_val, single_type, chunk_id)
+                # 2. Extract and store IOCs
+                chunk_iocs = extract_iocs(chunk_text_content)
+                for ioc_type, ioc_list in chunk_iocs.items():
+                    if ioc_type == "error": continue
+                    for ioc_val in ioc_list:
+                        TYPE_MAP = {"ips": "ip", "hashes": "hash", "cves": "cve", "domains": "domain", "emails": "email"}
+                        single_type = TYPE_MAP.get(ioc_type, ioc_type)
+                        sqlite.store_ioc(ioc_val, single_type, chunk_id, conn=conn)
 
-            # 3. MITRE mapping
-            mitre_matches = map_to_mitre(chunk_text_content)
-            for match in mitre_matches:
-                sqlite.store_mitre_mapping(chunk_id, match["technique"], match["tactic"], match.get("confidence", "UNKNOWN"))
+                # 3. MITRE mapping
+                mitre_matches = map_to_mitre(chunk_text_content)
+                for match in mitre_matches:
+                    sqlite.store_mitre_mapping(chunk_id, match["technique"], match["tactic"], match.get("confidence", "UNKNOWN"), conn=conn)
 
-            # 4. Timeline generation
-            timeline_events = extract_timestamps(chunk_text_content)
-            for ev in timeline_events:
-                severity = "LOW"
-                if any(k in ev["event"].lower() for k in ["fail", "deny", "malware"]):
-                    severity = "MEDIUM"
-                sqlite.store_timeline_event(chunk_id, ev["timestamp"], ev["event"], severity)
+                # 4. Timeline generation
+                timeline_events = extract_timestamps(chunk_text_content)
+                for ev in timeline_events:
+                    severity = "LOW"
+                    if any(k in ev["event"].lower() for k in ["fail", "deny", "malware"]):
+                        severity = "MEDIUM"
+                    sqlite.store_timeline_event(chunk_id, ev["timestamp"], ev["event"], severity, conn=conn)
 
-            if not timeline_events and mitre_matches:
-                desc = chunk_text_content.strip()[:100] + ("..." if len(chunk_text_content.strip()) > 100 else "")
-                sqlite.store_timeline_event(chunk_id, "T+unknown", f"[{mitre_matches[0]['tactic'].upper()}] {desc}", mitre_matches[0].get("confidence", "UNKNOWN"))
+                if not timeline_events and mitre_matches:
+                    desc = chunk_text_content.strip()[:100] + ("..." if len(chunk_text_content.strip()) > 100 else "")
+                    sqlite.store_timeline_event(chunk_id, "T+unknown", f"[{mitre_matches[0]['tactic'].upper()}] {desc}", mitre_matches[0].get("confidence", "UNKNOWN"), conn=conn)
 
-        sqlite.store_file_upload(file_hash, upload_id, file.filename)
-        
-        # Compute global correlation across all ingested logs
+            sqlite.store_file_upload(file_hash, upload_id, file.filename, conn=conn)
+
+        # Compute global correlation across all ingested logs (reads committed data)
         all_iocs = sqlite.get_all_extracted_iocs()
         global_correlations = correlate_iocs(all_iocs, sqlite)
         sqlite.store_global_correlation(global_correlations)
-        
+
         return jsonify({"message": "File uploaded successfully", "chunks_stored": len(chunks)}), 200
-            
+
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -159,9 +164,9 @@ def correlate_endpoint():
         correlations = current_app.sqlite_store.get_global_correlation()
         summary = get_correlation_summary(correlations)
         insights = generate_analyst_insights(correlations)
-        
+
         high_risk = [ioc for ioc, d in correlations.items() if d['risk_level'] == 'HIGH']
-        
+
         return jsonify({
             "correlations": correlations,
             "summary": summary,
@@ -182,11 +187,11 @@ def mitre_map():
         data = request.json
         if not data or 'text' not in data:
             return jsonify({"error": "No text provided"}), 400
-            
+
         text = data['text']
         techniques = map_to_mitre(text)
         kill_chain = build_kill_chain(techniques)
-        
+
         return jsonify({
             "techniques": techniques,
             "kill_chain": kill_chain,
@@ -206,12 +211,12 @@ def timeline_endpoint():
         data = request.json
         if not data or 'text' not in data:
             return jsonify({"error": "No text provided"}), 400
-            
+
         text = data['text']
         mitre_results = map_to_mitre(text)
         timeline = generate_timeline(text, mitre_results)
         summary = format_timeline_string(timeline)
-        
+
         return jsonify({
             "timeline": timeline,
             "summary": summary,
@@ -231,19 +236,18 @@ def query_system():
         data = request.json
         if not data or 'query' not in data:
             return jsonify({"error": "No query provided"}), 400
-            
+
         query_text = data['query']
         top_k = data.get('top_k', 5)
-        
+
         query_embedding = embedder.embed_query(query_text)
         if not query_embedding:
             return jsonify({"error": "Failed to embed query"}), 500
-            
+
         results = current_app.vector_store.query_similar(query_embedding, top_k)
-        print("\n=== RAW QUERY RESULTS ===")
-        print(results)
-        print("========================\n")
-        
+        logger.debug("=== RAW QUERY RESULTS ===")
+        logger.debug("%s", results)
+
         chunks = []
         if results and results.get('documents') and len(results['documents']) > 0:
             for i in range(len(results['documents'][0])):
@@ -252,35 +256,33 @@ def query_system():
                     "metadata": results['metadatas'][0][i] if results.get('metadatas') else {},
                     "distance": results['distances'][0][i] if results.get('distances') else 0.0
                 })
-                
+
         chunk_texts = [c["document"] for c in chunks]
-        print("\n=== RETRIEVED CHUNKS ===")
-        print("Chunks:", len(chunk_texts))
+        logger.debug("=== RETRIEVED CHUNKS === count=%s", len(chunk_texts))
         for i, c in enumerate(chunk_texts):
-            print(f"Chunk {i+1}: {c[:150]}")
-        print("========================\n")
+            logger.debug("Chunk %s: %s", i + 1, c[:150])
         combined_text = "\n".join(chunk_texts)
-        
+
         # Extract IoCs
         iocs = extract_iocs(combined_text)
-        
+
         # Fetch pre-computed Global Correlation
         correlations = current_app.sqlite_store.get_global_correlation()
-        
+
         # Map to MITRE
         mitre_results = map_to_mitre(combined_text)
         mitre = {
             "techniques": mitre_results,
             "kill_chain": build_kill_chain(mitre_results)
         }
-        
+
         # Generate Timeline
         timeline_events = generate_timeline(combined_text, mitre_results)
         timeline = {
             "events": timeline_events,
             "summary": format_timeline_string(timeline_events)
         }
-        
+
         # Analyze threat with Gemini
         analysis = analyze_threat(
             query=query_text,
@@ -289,9 +291,9 @@ def query_system():
             mitre=mitre,
             timeline=timeline
         )
-        
+
         return jsonify({
-            "status": "success", 
+            "status": "success",
             "analysis": analysis,
             "iocs": iocs,
             "correlation": {
@@ -304,7 +306,7 @@ def query_system():
             "chunks_used": len(chunk_texts),
             "query": query_text
         }), 200
-        
+
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
