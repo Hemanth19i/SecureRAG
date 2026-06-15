@@ -1,0 +1,7 @@
+venv/
+server/venv/
+__pycache__/
+*.pyc
+.code-review-graph/
+server/chroma_store/
+*.db

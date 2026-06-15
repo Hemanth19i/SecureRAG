@@ -1,0 +1,326 @@
+import uuid
+import traceback
+from datetime import datetime
+import hashlib
+from flask import Blueprint, request, jsonify, current_app
+from flask_jwt_extended import jwt_required, get_jwt
+from rag.chunker import chunk_text
+from rag.embedder import Embedder
+from intelligence.ioc_extractor import extract_iocs
+from intelligence.gemini_analyzer import analyze_threat, generate_incident_report
+from intelligence.mitre_mapper import map_to_mitre, build_kill_chain
+from intelligence.timeline_gen import generate_timeline, format_timeline_string, extract_timestamps
+from intelligence.correlator import correlate_iocs, get_correlation_summary, generate_analyst_insights
+
+api_bp = Blueprint('api', __name__)
+embedder = Embedder()
+
+@api_bp.route('/debug/chunks', methods=['GET'])
+@jwt_required()
+def debug_chunks():
+    claims = get_jwt()
+    if claims.get("role") != "ADMIN":
+        return jsonify({"error": "Admin privileges required"}), 403
+    
+    from flask import current_app
+
+    print("\n=== DEBUG CHUNKS ===")
+    print("Collection object:", current_app.vector_store.collection)
+    print("Collection count:", current_app.vector_store.collection.count())
+    print("====================\n")
+
+    all_data = current_app.vector_store.collection.get(
+        include=["documents", "metadatas"]
+    )
+
+    return jsonify({
+        "total_chunks": len(all_data.get("documents", [])),
+        "metadatas": all_data.get("metadatas", []),
+        "documents_preview": [d[:80] for d in all_data.get("documents", [])]
+    }), 200
+
+@api_bp.route('/upload', methods=['POST'])
+@jwt_required()
+def upload_log():
+    claims = get_jwt()
+    if claims.get("role") != "ADMIN":
+        return jsonify({"error": "Admin privileges required"}), 403
+    try:
+        file = request.files.get('file')
+        if not file:
+            return jsonify({"error": "No file provided"}), 400
+            
+        text = file.read().decode('utf-8')
+        
+        # Calculate SHA256 file fingerprint
+        file_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
+        
+        # Check for duplicates
+        existing_upload_id = current_app.sqlite_store.check_file_exists(file_hash)
+        if existing_upload_id:
+            return jsonify({
+                "error": "File already ingested", 
+                "upload_id": existing_upload_id
+            }), 409
+            
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # We need an upload ID for the DB
+        upload_id = str(uuid.uuid4())
+        
+        metadata = {
+            "filename": file.filename, 
+            "source_file": file.filename, 
+            "timestamp": now,
+            "upload_id": upload_id
+        }
+        
+        
+# Parse & chunk first (no DB writes yet)
+        chunks = chunk_text(text)
+        if not chunks:
+            return jsonify({"error": "Failed to chunk text"}), 500
+
+        embeddings = embedder.embed_chunks(chunks)
+        if not embeddings:
+            return jsonify({"error": "Failed to generate embeddings"}), 500
+
+        chunk_metadatas = []
+        chunk_ids = []
+        for i, chunk_text_content in enumerate(chunks):
+            meta = metadata.copy()
+            meta['chunk_index'] = i
+            chunk_id = f"chunk_{upload_id}_{i}"
+            meta['chunk_id'] = chunk_id
+            chunk_ids.append(chunk_id)
+            clean_meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
+            chunk_metadatas.append(clean_meta)
+
+        # Write to ChromaDB FIRST. If this fails, nothing else is written
+        # so a retry won't create duplicate/orphaned SQLite rows.
+        success = current_app.vector_store.store_embeddings(chunks, embeddings, chunk_metadatas, ids=chunk_ids)
+        if not success:
+            return jsonify({"error": "Failed to store in ChromaDB"}), 500
+
+        # ChromaDB write succeeded — now safe to populate SQLite analysis tables
+        sqlite = current_app.sqlite_store
+        for i, chunk_text_content in enumerate(chunks):
+            chunk_id = chunk_ids[i]
+
+            # 1. Store raw chunk
+            sqlite.store_log_chunk(chunk_id, upload_id, file.filename, chunk_text_content)
+
+            # 2. Extract and store IOCs
+            chunk_iocs = extract_iocs(chunk_text_content)
+            for ioc_type, ioc_list in chunk_iocs.items():
+                if ioc_type == "error": continue
+                for ioc_val in ioc_list:
+                    TYPE_MAP = {"ips": "ip", "hashes": "hash", "cves": "cve", "domains": "domain", "emails": "email"}
+                    single_type = TYPE_MAP.get(ioc_type, ioc_type)
+                    sqlite.store_ioc(ioc_val, single_type, chunk_id)
+
+            # 3. MITRE mapping
+            mitre_matches = map_to_mitre(chunk_text_content)
+            for match in mitre_matches:
+                sqlite.store_mitre_mapping(chunk_id, match["technique"], match["tactic"], match.get("confidence", "UNKNOWN"))
+
+            # 4. Timeline generation
+            timeline_events = extract_timestamps(chunk_text_content)
+            for ev in timeline_events:
+                severity = "LOW"
+                if any(k in ev["event"].lower() for k in ["fail", "deny", "malware"]):
+                    severity = "MEDIUM"
+                sqlite.store_timeline_event(chunk_id, ev["timestamp"], ev["event"], severity)
+
+            if not timeline_events and mitre_matches:
+                desc = chunk_text_content.strip()[:100] + ("..." if len(chunk_text_content.strip()) > 100 else "")
+                sqlite.store_timeline_event(chunk_id, "T+unknown", f"[{mitre_matches[0]['tactic'].upper()}] {desc}", mitre_matches[0].get("confidence", "UNKNOWN"))
+
+        sqlite.store_file_upload(file_hash, upload_id, file.filename)
+        
+        # Compute global correlation across all ingested logs
+        all_iocs = sqlite.get_all_extracted_iocs()
+        global_correlations = correlate_iocs(all_iocs, sqlite)
+        sqlite.store_global_correlation(global_correlations)
+        
+        return jsonify({"message": "File uploaded successfully", "chunks_stored": len(chunks)}), 200
+            
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/correlate', methods=['POST'])
+@jwt_required()
+def correlate_endpoint():
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        correlations = current_app.sqlite_store.get_global_correlation()
+        summary = get_correlation_summary(correlations)
+        insights = generate_analyst_insights(correlations)
+        
+        high_risk = [ioc for ioc, d in correlations.items() if d['risk_level'] == 'HIGH']
+        
+        return jsonify({
+            "correlations": correlations,
+            "summary": summary,
+            "high_risk_iocs": high_risk,
+            "analyst_insights": insights
+        }), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/mitre-map', methods=['POST'])
+@jwt_required()
+def mitre_map():
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        data = request.json
+        if not data or 'text' not in data:
+            return jsonify({"error": "No text provided"}), 400
+            
+        text = data['text']
+        techniques = map_to_mitre(text)
+        kill_chain = build_kill_chain(techniques)
+        
+        return jsonify({
+            "techniques": techniques,
+            "kill_chain": kill_chain,
+            "total_techniques": len(techniques)
+        }), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/timeline', methods=['POST'])
+@jwt_required()
+def timeline_endpoint():
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        data = request.json
+        if not data or 'text' not in data:
+            return jsonify({"error": "No text provided"}), 400
+            
+        text = data['text']
+        mitre_results = map_to_mitre(text)
+        timeline = generate_timeline(text, mitre_results)
+        summary = format_timeline_string(timeline)
+        
+        return jsonify({
+            "timeline": timeline,
+            "summary": summary,
+            "total_events": len(timeline)
+        }), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/query', methods=['POST'])
+@jwt_required()
+def query_system():
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        data = request.json
+        if not data or 'query' not in data:
+            return jsonify({"error": "No query provided"}), 400
+            
+        query_text = data['query']
+        top_k = data.get('top_k', 5)
+        
+        query_embedding = embedder.embed_query(query_text)
+        if not query_embedding:
+            return jsonify({"error": "Failed to embed query"}), 500
+            
+        results = current_app.vector_store.query_similar(query_embedding, top_k)
+        print("\n=== RAW QUERY RESULTS ===")
+        print(results)
+        print("========================\n")
+        
+        chunks = []
+        if results and results.get('documents') and len(results['documents']) > 0:
+            for i in range(len(results['documents'][0])):
+                chunks.append({
+                    "document": results['documents'][0][i],
+                    "metadata": results['metadatas'][0][i] if results.get('metadatas') else {},
+                    "distance": results['distances'][0][i] if results.get('distances') else 0.0
+                })
+                
+        chunk_texts = [c["document"] for c in chunks]
+        print("\n=== RETRIEVED CHUNKS ===")
+        print("Chunks:", len(chunk_texts))
+        for i, c in enumerate(chunk_texts):
+            print(f"Chunk {i+1}: {c[:150]}")
+        print("========================\n")
+        combined_text = "\n".join(chunk_texts)
+        
+        # Extract IoCs
+        iocs = extract_iocs(combined_text)
+        
+        # Fetch pre-computed Global Correlation
+        correlations = current_app.sqlite_store.get_global_correlation()
+        
+        # Map to MITRE
+        mitre_results = map_to_mitre(combined_text)
+        mitre = {
+            "techniques": mitre_results,
+            "kill_chain": build_kill_chain(mitre_results)
+        }
+        
+        # Generate Timeline
+        timeline_events = generate_timeline(combined_text, mitre_results)
+        timeline = {
+            "events": timeline_events,
+            "summary": format_timeline_string(timeline_events)
+        }
+        
+        # Analyze threat with Gemini
+        analysis = analyze_threat(
+            query=query_text,
+            chunks=chunk_texts,
+            correlations=correlations,
+            mitre=mitre,
+            timeline=timeline
+        )
+        
+        return jsonify({
+            "status": "success", 
+            "analysis": analysis,
+            "iocs": iocs,
+            "correlation": {
+                "details": correlations,
+                "summary": get_correlation_summary(correlations),
+                "analyst_insights": generate_analyst_insights(correlations)
+            },
+            "mitre": mitre,
+            "timeline": timeline,
+            "chunks_used": len(chunk_texts),
+            "query": query_text
+        }), 200
+        
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+@api_bp.route('/report', methods=['POST'])
+@jwt_required()
+def report_endpoint():
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        data = request.json
+        if not data or 'analysis' not in data:
+            return jsonify({"error": "No analysis object provided"}), 400
+
+        report_text = generate_incident_report(data['analysis'])
+        return jsonify({"report": report_text}), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
