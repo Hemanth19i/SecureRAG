@@ -1,7 +1,10 @@
-2026-06-15 09:14:01 sshd[2210]: Failed password for root from 203.0.113.42 port 22 ssh2
-2026-06-15 09:14:03 sshd[2210]: Failed password for root from 203.0.113.42 port 22 ssh2
-2026-06-15 09:14:05 sshd[2210]: Failed password for root from 203.0.113.42 port 22 ssh2
-2026-06-15 09:14:07 sshd[2210]: Failed password for root from 203.0.113.42 port 22 ssh2
-2026-06-15 09:14:12 sshd[2210]: Accepted password for root from 203.0.113.42 port 22 ssh2
-2026-06-15 09:15:30 sshd[2210]: session opened for user root by 203.0.113.42
-2026-06-15 09:16:45 kernel: outbound connection to 45.33.32.156 port 443, 1500 MB transferred
+2026-06-15 09:14:01 sshd[2210]: Failed password attempt for user root from 203.0.113.42 port 22 ssh2
+2026-06-15 09:14:03 sshd[2210]: Failed password attempt for user root from 203.0.113.42 port 22 ssh2
+2026-06-15 09:14:05 sshd[2210]: Failed password attempt for user root from 203.0.113.42 port 22 ssh2
+2026-06-15 09:14:07 sshd[2210]: Failed password attempt for user root from 203.0.113.42 port 22 ssh2
+2026-06-15 09:14:12 sshd[2210]: Successful authentication for user root from 203.0.113.42 port 22 ssh2
+2026-06-15 09:15:30 sshd[2210]: Interactive session established for user root from source IP 203.0.113.42
+2026-06-15 09:16:45 firewall: Outbound HTTPS connection initiated from internal host 10.0.0.5 to remote IP 45.33.32.156 on port 443
+2026-06-15 09:17:10 security-monitor: Potential brute-force compromise detected involving source IP 203.0.113.42
+2026-06-15 09:18:22 network-monitor: Unusual outbound data transfer observed to 45.33.32.156, total transferred: 1500 MB
+2026-06-15 09:18:55 threat-intel: Destination IP 45.33.32.156 matched known command-and-control infrastructure

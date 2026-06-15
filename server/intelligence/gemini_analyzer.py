@@ -200,7 +200,7 @@ Only label an IP as attacker/malicious if it is the SOURCE of attack traffic lik
 
         try:
             response = client.models.generate_content(
-                model="gemini-2.0-flash-lite",
+                model="gemini-2.5-flash",
                 contents=user_prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
@@ -210,10 +210,10 @@ Only label an IP as attacker/malicious if it is the SOURCE of attack traffic lik
                 )
             )
         except Exception as e1:
-            print(f"Primary model gemini-2.0-flash-lite failed: {e1}. Falling back to gemini-1.5-flash.")
+            print(f"Primary model gemini-2.5-flash failed: {e1}. Falling back to gemini-flash-latest.")
             try:
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash-lite",
+                    model="gemini-flash-latest",
                     contents=user_prompt,
                     config=types.GenerateContentConfig(
                         system_instruction=system_instruction,
@@ -223,7 +223,7 @@ Only label an IP as attacker/malicious if it is the SOURCE of attack traffic lik
                     )
                 )
             except Exception as e2:
-                print(f"Fallback model gemini-2.0-flash-lite failed: {e2}. Falling back to rule-based analyzer.")
+                print(f"Fallback model gemini-flash-latest failed: {e2}. Falling back to rule-based analyzer.")
                 return rule_based_analyze(chunks, query, correlations, mitre, timeline)
 
         text = response.text

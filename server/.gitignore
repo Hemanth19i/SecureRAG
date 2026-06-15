@@ -5,3 +5,4 @@ __pycache__/
 .code-review-graph/
 server/chroma_store/
 *.db
+.env
