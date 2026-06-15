@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+
+# Databases and local data stores
+*.db
+*.sqlite3
+
+# ChromaDB vector store
+chroma_store/
+
+# Secrets
+.env

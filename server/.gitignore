@@ -1,8 +1,2 @@
-venv/
-server/venv/
-__pycache__/
-*.pyc
+# Server-specific ignores (general patterns live in the repo-root .gitignore)
 .code-review-graph/
-server/chroma_store/
-*.db
-.env
