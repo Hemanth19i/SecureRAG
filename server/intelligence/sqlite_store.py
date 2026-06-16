@@ -6,6 +6,11 @@ from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
+# Confidence/severity rank -> label, single source of truth shared by
+# get_evidence_log and get_mitre_for_upload (both rank a text confidence
+# column via the same CASE-based MAX() trick and need to map it back).
+CONFIDENCE_RANK_LABEL = {3: "HIGH", 2: "MEDIUM", 1: "LOW", 0: "NONE"}
+
 class SQLiteStore:
     def __init__(self, db_path="./securerag.db"):
         self.db_path = db_path
@@ -401,7 +406,6 @@ class SQLiteStore:
             return {"docs_indexed": 0, "iocs_extracted": 0, "mitre_mapped": 0, "threats_critical": 0}
 
     def get_evidence_log(self):
-        SEVERITY_RANK_LABEL = {3: "HIGH", 2: "MEDIUM", 1: "LOW", 0: "NONE"}
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -441,7 +445,7 @@ class SQLiteStore:
                 {
                     "upload_id": row["upload_id"],
                     "filename": row["filename"],
-                    "severity": SEVERITY_RANK_LABEL.get(row["severity_rank"], "NONE"),
+                    "severity": CONFIDENCE_RANK_LABEL.get(row["severity_rank"], "NONE"),
                     "ioc_count": row["ioc_count"],
                     "mitre_count": row["mitre_count"],
                     "ingested_at": row["ingested_at"],
@@ -450,4 +454,89 @@ class SQLiteStore:
             ]
         except Exception as e:
             logger.error("Error getting evidence log: %s", e)
+            return []
+
+    def get_upload_info(self, upload_id):
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT upload_id, filename, timestamp FROM file_uploads WHERE upload_id = ?",
+                (upload_id,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            return dict(row) if row else None
+        except Exception as e:
+            logger.error("Error getting upload info: %s", e)
+            return None
+
+    def get_iocs_for_upload(self, upload_id):
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT DISTINCT e.ioc_value, e.ioc_type, m.context_role
+            FROM chunk_ioc_mapping m
+            JOIN log_chunks lc ON lc.chunk_id = m.chunk_id
+            JOIN extracted_iocs e ON e.ioc_value = m.ioc_value
+            WHERE lc.upload_id = ?
+            """, (upload_id,))
+            rows = cursor.fetchall()
+            conn.close()
+            return [
+                {"ioc_value": row["ioc_value"], "ioc_type": row["ioc_type"], "context_role": row["context_role"]}
+                for row in rows
+            ]
+        except Exception as e:
+            logger.error("Error getting IOCs for upload: %s", e)
+            return []
+
+    def get_mitre_for_upload(self, upload_id):
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT cmm.technique_id, cmm.tactic,
+                   MAX(CASE cmm.confidence
+                         WHEN 'HIGH' THEN 3
+                         WHEN 'MEDIUM' THEN 2
+                         WHEN 'LOW' THEN 1
+                         ELSE 0 END) AS conf_rank
+            FROM chunk_mitre_mapping cmm
+            JOIN log_chunks lc ON lc.chunk_id = cmm.chunk_id
+            WHERE lc.upload_id = ?
+            GROUP BY cmm.technique_id, cmm.tactic
+            """, (upload_id,))
+            rows = cursor.fetchall()
+            conn.close()
+            return [
+                {
+                    "technique_id": row["technique_id"],
+                    "tactic": row["tactic"],
+                    "confidence": CONFIDENCE_RANK_LABEL.get(row["conf_rank"], "NONE"),
+                }
+                for row in rows
+            ]
+        except Exception as e:
+            logger.error("Error getting MITRE techniques for upload: %s", e)
+            return []
+
+    def get_co_occurring_iocs(self, upload_id):
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT DISTINCT m1.ioc_value AS ioc_a, m2.ioc_value AS ioc_b
+            FROM chunk_ioc_mapping m1
+            JOIN chunk_ioc_mapping m2
+              ON m1.chunk_id = m2.chunk_id AND m1.ioc_value < m2.ioc_value
+            JOIN log_chunks lc ON lc.chunk_id = m1.chunk_id
+            WHERE lc.upload_id = ?
+            """, (upload_id,))
+            rows = cursor.fetchall()
+            conn.close()
+            return [{"ioc_a": row["ioc_a"], "ioc_b": row["ioc_b"]} for row in rows]
+        except Exception as e:
+            logger.error("Error getting co-occurring IOCs for upload: %s", e)
             return []

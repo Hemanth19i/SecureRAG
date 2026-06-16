@@ -4,6 +4,26 @@ import traceback
 
 logger = logging.getLogger(__name__)
 
+# Kill-chain phase ordering — single source of truth, shared with
+# timeline_gen.py and the Attack Graph builder so all three agree on
+# tactic sequencing.
+PHASE_ORDER = {
+    "TA0043": 1,   # Reconnaissance
+    "TA0042": 2,   # Resource Development
+    "TA0001": 3,   # Initial Access
+    "TA0002": 4,   # Execution
+    "TA0003": 5,   # Persistence
+    "TA0004": 6,   # Privilege Escalation
+    "TA0005": 7,   # Defense Evasion
+    "TA0006": 8,   # Credential Access
+    "TA0007": 9,   # Discovery
+    "TA0008": 10,  # Lateral Movement
+    "TA0009": 11,  # Collection
+    "TA0011": 12,  # Command and Control
+    "TA0010": 13,  # Exfiltration
+    "TA0040": 14,  # Impact
+}
+
 MITRE_PATTERNS = {
     r"brute force|auth fail|password fail|login fail|failed password": {
         "tactic": "Credential Access", "technique": "T1110",
@@ -70,6 +90,11 @@ MITRE_PATTERNS = {
         "name": "Application Layer Protocol", "phase": "TA0011"
     }
 }
+
+# technique_id -> phase, derived from MITRE_PATTERNS so callers that only have
+# a stored technique_id (e.g. chunk_mitre_mapping rows, which don't persist
+# phase) can still order techniques along the kill chain via PHASE_ORDER.
+TECHNIQUE_PHASE = {v["technique"]: v["phase"] for v in MITRE_PATTERNS.values()}
 
 def map_to_mitre(text: str) -> list[dict]:
     try:
@@ -157,23 +182,7 @@ def map_to_mitre(text: str) -> list[dict]:
 
 def build_kill_chain(mitre_results: list) -> list[dict]:
     try:
-        phase_order = {
-            "TA0043": 1,   # Reconnaissance
-            "TA0042": 2,   # Resource Development
-            "TA0001": 3,   # Initial Access
-            "TA0002": 4,   # Execution
-            "TA0003": 5,   # Persistence
-            "TA0004": 6,   # Privilege Escalation
-            "TA0005": 7,   # Defense Evasion
-            "TA0006": 8,   # Credential Access
-            "TA0007": 9,   # Discovery
-            "TA0008": 10,  # Lateral Movement
-            "TA0009": 11,  # Collection
-            "TA0011": 12,  # Command and Control
-            "TA0010": 13,  # Exfiltration
-            "TA0040": 14,  # Impact
-        }
-        return sorted(mitre_results, key=lambda x: phase_order.get(x.get("phase", ""), 99))
+        return sorted(mitre_results, key=lambda x: PHASE_ORDER.get(x.get("phase", ""), 99))
     except Exception as e:
         logger.error("Error in build_kill_chain: %s", e)
         traceback.print_exc()

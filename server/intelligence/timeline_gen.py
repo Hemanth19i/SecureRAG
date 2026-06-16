@@ -2,7 +2,7 @@ import re
 import logging
 import traceback
 from datetime import datetime
-from intelligence.mitre_mapper import map_to_mitre
+from intelligence.mitre_mapper import map_to_mitre, PHASE_ORDER
 
 logger = logging.getLogger(__name__)
 
@@ -101,25 +101,7 @@ def generate_timeline(log_text: str, mitre_results: list) -> list[dict]:
 
         # Deduplication mapping by minute bucket
         seen = {}
-        
-        # TA phase order mapping for final kill chain sort
-        phase_order_map = {
-            "TA0043": 1,   # Reconnaissance
-            "TA0042": 2,   # Resource Development
-            "TA0001": 3,   # Initial Access
-            "TA0002": 4,   # Execution
-            "TA0003": 5,   # Persistence
-            "TA0004": 6,   # Privilege Escalation
-            "TA0005": 7,   # Defense Evasion
-            "TA0006": 8,   # Credential Access
-            "TA0007": 9,   # Discovery
-            "TA0008": 10,  # Lateral Movement
-            "TA0009": 11,  # Collection
-            "TA0011": 12,  # Command and Control
-            "TA0010": 13,  # Exfiltration
-            "TA0040": 14,  # Impact
-        }
-        
+
         for e in events:
             line = e["raw_line"]
             mitre_match = map_to_mitre(line)
@@ -146,7 +128,7 @@ def generate_timeline(log_text: str, mitre_results: list) -> list[dict]:
                     "severity": confidence,
                     "count": 1,
                     "descriptions": [e["event"]],
-                    "phase_order": phase_order_map.get(phase, 99)
+                    "phase_order": PHASE_ORDER.get(phase, 99)
                 }
             else:
                 seen[bucket_key]['count'] += 1

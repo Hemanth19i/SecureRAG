@@ -12,6 +12,7 @@ from intelligence.gemini_analyzer import analyze_threat, generate_incident_repor
 from intelligence.mitre_mapper import map_to_mitre, build_kill_chain
 from intelligence.timeline_gen import generate_timeline, format_timeline_string
 from intelligence.correlator import correlate_iocs, get_correlation_summary, generate_analyst_insights
+from intelligence.attack_graph import build_attack_graph
 
 logger = logging.getLogger(__name__)
 
@@ -315,6 +316,26 @@ def stats_endpoint():
             "readouts": sqlite.get_dashboard_readouts(),
             "evidence": sqlite.get_evidence_log()
         }), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/attack-graph', methods=['GET'])
+@jwt_required()
+def attack_graph_endpoint():
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        upload_id = request.args.get('upload_id')
+        if not upload_id:
+            return jsonify({"error": "upload_id query parameter is required"}), 400
+
+        graph = build_attack_graph(current_app.sqlite_store, upload_id)
+        if graph is None:
+            return jsonify({"error": "Upload not found"}), 404
+
+        return jsonify(graph), 200
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
