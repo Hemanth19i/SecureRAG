@@ -101,6 +101,11 @@ async function fetchQuery(token, query) {
   return apiFetch("/query", { token, method: "POST", body: { query } });
 }
 
+async function fetchStats(token) {
+  const data = await apiFetch("/stats", { token, method: "GET" });
+  return { readouts: data.readouts || {}, evidence: data.evidence || [] };
+}
+
 /* ================================================================== */
 /*  Severity — single source of truth (colours used ONLY on severity) */
 /* ================================================================== */
@@ -124,24 +129,16 @@ const NAV = [
 const NAV_BY_ID = Object.fromEntries(NAV.map((n) => [n.id, n]));
 
 /* ================================================================== */
-/*  Mock data                                                         */
+/*  Dashboard readout definitions — values come live from GET /stats  */
 /* ================================================================== */
-const READOUTS = [
-  { id: "docs", label: "DOCS.INDEXED", value: 1287, delta: "+12%", up: true },
-  { id: "ioc", label: "IOC.EXTRACTED", value: 4892, delta: "+318", up: true },
-  { id: "crit", label: "THREAT.CRITICAL", value: 17, delta: "+3", up: true, critical: true },
-  { id: "mitre", label: "MITRE.MAPPED", value: 38, delta: "+5", up: true },
+const READOUT_DEFS = [
+  { id: "docs", label: "DOCS.INDEXED", key: "docs_indexed" },
+  { id: "ioc", label: "IOC.EXTRACTED", key: "iocs_extracted" },
+  { id: "crit", label: "THREAT.CRITICAL", key: "threats_critical", critical: true },
+  { id: "mitre", label: "MITRE.MAPPED", key: "mitre_mapped" },
 ];
 
-const EVIDENCE = [
-  { id: "E-7741", doc: "auth_ssh_2026-06-14.log", severity: "critical", iocs: 42, mitre: 6, ts: "06-14 02:11:44" },
-  { id: "E-7738", doc: "firewall_edge_egress.csv", severity: "high", iocs: 28, mitre: 4, ts: "06-14 01:53:02" },
-  { id: "E-7733", doc: "dns_exfil_capture.log", severity: "high", iocs: 19, mitre: 3, ts: "06-14 01:30:18" },
-  { id: "E-7729", doc: "endpoint_av_quarantine.txt", severity: "medium", iocs: 11, mitre: 2, ts: "06-14 00:58:07" },
-  { id: "E-7724", doc: "vpn_session_audit.log", severity: "low", iocs: 6, mitre: 1, ts: "06-13 23:12:55" },
-  { id: "E-7719", doc: "web_access_proxy.log", severity: "medium", iocs: 14, mitre: 2, ts: "06-13 22:40:31" },
-];
-
+/* Mock data — Telemetry chart only; no backend time-series exists yet */
 const MODULES = [
   { id: "ingest", label: "INGEST PIPELINE", icon: Database, code: "MOD.01" },
   { id: "correlate", label: "CORRELATION ENGINE", icon: Network, code: "MOD.02" },
@@ -331,10 +328,11 @@ function Masthead() {
 /* ================================================================== */
 /*  Instrument cluster                                                */
 /* ================================================================== */
-function InstrumentCluster() {
+function InstrumentCluster({ readouts }) {
   const reduce = useReducedMotion();
   useTick(); // drives the live refresh clock
   const now = new Date();
+  const items = READOUT_DEFS.map((d) => ({ ...d, value: readouts[d.key] ?? 0 }));
   return (
     <section className="panel cluster">
       <span className="stamp mono">[ x:01 ]</span>
@@ -348,7 +346,7 @@ function InstrumentCluster() {
         animate="show"
         variants={{ hidden: {}, show: { transition: reduce ? {} : { staggerChildren: 0.07, delayChildren: 0.9 } } }}
       >
-        {READOUTS.map((r) => (
+        {items.map((r) => (
           <motion.div
             className="readout"
             key={r.id}
@@ -356,7 +354,7 @@ function InstrumentCluster() {
           >
             <span className="readout-label mono">{r.label}</span>
             <span className={`readout-value mono${r.critical ? " crit" : ""}`}><Counter value={r.value} /></span>
-            <span className="readout-delta mono"><span className="tick">{r.up ? "▲" : "▾"}</span> {r.delta}</span>
+            <span className="readout-delta mono">--</span>
           </motion.div>
         ))}
       </motion.div>
@@ -379,7 +377,7 @@ function Sev({ level }) {
 /* ================================================================== */
 /*  Evidence log                                                      */
 /* ================================================================== */
-function EvidenceLog() {
+function EvidenceLog({ evidence }) {
   const reduce = useReducedMotion();
   return (
     <motion.section
@@ -389,7 +387,7 @@ function EvidenceLog() {
       <span className="stamp mono">[ x:02 ]</span>
       <div className="panel-head">
         <SysLabel title="EVIDENCE LOG" index="06" status="LIVE" />
-        <span className="refresh mono">{EVIDENCE.length} RECORDS</span>
+        <span className="refresh mono">{evidence.length} RECORDS</span>
       </div>
       <div className="ev-wrap">
         <table className="ev">
@@ -409,17 +407,17 @@ function EvidenceLog() {
             viewport={{ once: true, margin: "-6% 0px" }}
             variants={{ hidden: {}, show: { transition: reduce ? {} : { staggerChildren: 0.06 } } }}
           >
-            {EVIDENCE.map((r) => (
+            {evidence.map((r) => (
               <motion.tr
-                key={r.id}
+                key={r.upload_id}
                 variants={reduce ? { hidden: { opacity: 1 }, show: { opacity: 1 } } : { hidden: { opacity: 0, y: 8 }, show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: EASE } } }}
               >
-                <td className="mono ref">{r.id}</td>
-                <td className="mono artifact">{r.doc}</td>
+                <td className="mono ref">{r.upload_id.slice(0, 8)}</td>
+                <td className="mono artifact">{r.filename}</td>
                 <td><Sev level={r.severity} /></td>
-                <td className="mono num">{r.iocs}</td>
-                <td className="mono num">{r.mitre}</td>
-                <td className="mono logged">{r.ts}</td>
+                <td className="mono num">{r.ioc_count}</td>
+                <td className="mono num">{r.mitre_count}</td>
+                <td className="mono logged">{r.ingested_at}</td>
               </motion.tr>
             ))}
           </motion.tbody>
@@ -511,14 +509,77 @@ function Rail({ active, onSelect, open, onClose }) {
 /*  Views                                                             */
 /* ================================================================== */
 function Workstation() {
+  const { token, login, logout } = useAuth();
+  const [state, setState] = useState({ status: "idle", readouts: {}, evidence: [], error: "" });
+
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    fetchStats(token).then(
+      (data) => { if (active) setState({ status: "ready", readouts: data.readouts, evidence: data.evidence, error: "" }); },
+      (e) => {
+        if (!active) return;
+        if (e.status === 401) { logout(); setState({ status: "idle", readouts: {}, evidence: [], error: "" }); }
+        else setState({ status: "error", readouts: {}, evidence: [], error: e.message || "Request failed" });
+      }
+    );
+    return () => { active = false; };
+  }, [token, logout]);
+
+  const retry = () => {
+    if (!token) return;
+    setState({ status: "loading", readouts: {}, evidence: [], error: "" });
+    fetchStats(token).then(
+      (data) => setState({ status: "ready", readouts: data.readouts, evidence: data.evidence, error: "" }),
+      (e) => {
+        if (e.status === 401) { logout(); setState({ status: "idle", readouts: {}, evidence: [], error: "" }); }
+        else setState({ status: "error", readouts: {}, evidence: [], error: e.message || "Request failed" });
+      }
+    );
+  };
+
+  const loading = token && (state.status === "idle" || state.status === "loading");
+  const isEmpty = state.status === "ready" && (state.readouts.docs_indexed ?? 0) === 0;
+  const showLive = token && state.status === "ready" && !isEmpty;
+
   return (
     <div className="ws">
       <Masthead />
-      <InstrumentCluster />
-      <div className="ws-grid">
-        <EvidenceLog />
-        <ModuleRows />
-      </div>
+
+      {!showLive && (
+        <section className="panel cluster">
+          <span className="stamp mono">[ x:01 ]</span>
+          <div className="panel-head">
+            <SysLabel title="SYSTEM READOUT" index="04" status={token ? "LIVE" : "LOCKED"} />
+          </div>
+
+          {!token && <LoginGate onLogin={login} />}
+
+          {loading && <p className="mono load-msg">// LOADING SYSTEM TELEMETRY…</p>}
+
+          {token && state.status === "error" && (
+            <div className="state-err">
+              <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {state.error}</p>
+              <button type="button" className="ioc-btn mono" onClick={retry}>RETRY</button>
+            </div>
+          )}
+
+          {token && state.status === "ready" && isEmpty && (
+            <p className="mono load-msg">// NO DATA INGESTED YET.</p>
+          )}
+        </section>
+      )}
+
+      {showLive && (
+        <>
+          <InstrumentCluster readouts={state.readouts} />
+          <div className="ws-grid">
+            <EvidenceLog evidence={state.evidence} />
+            <ModuleRows />
+          </div>
+        </>
+      )}
+
       <footer className="footer mono">
         <span>© 2026 SecureRAG</span>
         <span>Developed by Hemanth A R</span>
