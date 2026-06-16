@@ -46,6 +46,28 @@ MITRE_PATTERNS = {
     r"backdoor|rootkit|persistence": {
         "tactic": "Persistence", "technique": "T1547",
         "name": "Boot or Logon Autostart Execution", "phase": "TA0003"
+    },
+    # Phase 2 — additional high-value techniques (additive; use the shared
+    # default confidence/evidence scoring path).
+    r"data encrypted|files encrypted|been encrypted|ransom note|ransom demand|\.encrypted\b": {
+        "tactic": "Impact", "technique": "T1486",
+        "name": "Data Encrypted for Impact", "phase": "TA0040"
+    },
+    r"powershell|cmd\.exe|/bin/bash|/bin/sh|bash -c|sh -c|python -c|wscript|cscript": {
+        "tactic": "Execution", "technique": "T1059",
+        "name": "Command and Scripting Interpreter", "phase": "TA0002"
+    },
+    r"mimikatz|lsass|/etc/shadow|credential dump|hashdump|secretsdump|sam dump": {
+        "tactic": "Credential Access", "technique": "T1003",
+        "name": "OS Credential Dumping", "phase": "TA0006"
+    },
+    r"disable firewall|disable antivirus|disable defender|firewall disabled|antivirus disabled|defender disabled|impair defense|tamper protection": {
+        "tactic": "Defense Evasion", "technique": "T1562",
+        "name": "Impair Defenses", "phase": "TA0005"
+    },
+    r"\bc2\b|command and control|beacon|beaconing|dns tunnel": {
+        "tactic": "Command and Control", "technique": "T1071",
+        "name": "Application Layer Protocol", "phase": "TA0011"
     }
 }
 
