@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence, animate, useInView, useReducedMotion } from "framer-motion";
 import {
   LayoutDashboard,
@@ -14,6 +14,8 @@ import {
   Menu,
   X,
   ArrowRight,
+  AlertTriangle,
+  Lock,
 } from "lucide-react";
 
 /* ================================================================== */
@@ -22,6 +24,57 @@ import {
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
 const ENV = (import.meta.env.MODE || "development").toUpperCase();
 const EASE = [0.16, 1, 0.3, 1];
+
+/* ================================================================== */
+/*  Auth & API plumbing                                               */
+/* ================================================================== */
+const TOKEN_KEY = "srag_token";
+
+async function apiFetch(path, { token = "", method = "GET", body } = {}) {
+  const res = await fetch(`${API}${path}`, {
+    method,
+    headers: {
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const err = new Error(res.status === 401 ? "Unauthorized" : `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+function useAuth() {
+  const [token, setToken] = useState(() => {
+    try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
+  });
+  const login = useCallback(async (username, password) => {
+    const data = await apiFetch("/auth/login", { method: "POST", body: { username, password } });
+    setToken(data.access_token);
+    try { localStorage.setItem(TOKEN_KEY, data.access_token); } catch { /* ignore */ }
+    return data;
+  }, []);
+  const logout = useCallback(() => {
+    setToken("");
+    try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ }
+  }, []);
+  return { token, login, logout };
+}
+
+async function fetchCorrelations(token) {
+  const data = await apiFetch("/correlate", { token, method: "POST" });
+  return Object.entries(data.correlations || {}).map(([value, d]) => ({
+    value,
+    category: d.category || "—",
+    role: d.role || "—",
+    risk: d.risk_level || "LOW",
+    files: Array.isArray(d.seen_in_files) ? d.seen_in_files.length : 0,
+    freq: d.frequency ?? 0,
+  }));
+}
 
 /* ================================================================== */
 /*  Severity — single source of truth (colours used ONLY on severity) */
@@ -449,6 +502,148 @@ function Workstation() {
   );
 }
 
+/* ================================================================== */
+/*  IOC Explorer — live data from POST /correlate                     */
+/* ================================================================== */
+function LoginGate({ onLogin }) {
+  const [u, setU] = useState("");
+  const [p, setP] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setErr("");
+    try {
+      await onLogin(u, p);
+    } catch (e2) {
+      setErr(e2.status === 401 ? "Invalid credentials" : (e2.message || "Login failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="ioc-login" onSubmit={submit}>
+      <p className="mono load-msg"><Lock size={13} aria-hidden="true" /> AUTHENTICATION REQUIRED — connect an ADMIN or ANALYST session.</p>
+      <div className="ioc-fields">
+        <input className="ioc-input mono" placeholder="username" value={u} onChange={(e) => setU(e.target.value)} autoComplete="username" aria-label="Username" />
+        <input className="ioc-input mono" type="password" placeholder="password" value={p} onChange={(e) => setP(e.target.value)} autoComplete="current-password" aria-label="Password" />
+        <button className="ioc-btn mono" type="submit" disabled={busy || !u || !p}>{busy ? "…" : "CONNECT"}</button>
+      </div>
+      {err && <p className="mono ioc-err"><AlertTriangle size={13} aria-hidden="true" /> {err}</p>}
+    </form>
+  );
+}
+
+function IOCExplorer() {
+  const { token, login, logout } = useAuth();
+  const [state, setState] = useState({ status: "idle", rows: [], error: "" });
+
+  // The effect performs no synchronous setState — results are applied inside
+  // the deferred promise handlers, and "loading" is derived below.
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    fetchCorrelations(token).then(
+      (rows) => { if (active) setState({ status: "ready", rows, error: "" }); },
+      (e) => {
+        if (!active) return;
+        if (e.status === 401) { logout(); setState({ status: "idle", rows: [], error: "" }); }
+        else setState({ status: "error", rows: [], error: e.message || "Request failed" });
+      }
+    );
+    return () => { active = false; };
+  }, [token, logout]);
+
+  const retry = () => {
+    if (!token) return;
+    setState({ status: "loading", rows: [], error: "" });
+    fetchCorrelations(token).then(
+      (rows) => setState({ status: "ready", rows, error: "" }),
+      (e) => {
+        if (e.status === 401) { logout(); setState({ status: "idle", rows: [], error: "" }); }
+        else setState({ status: "error", rows: [], error: e.message || "Request failed" });
+      }
+    );
+  };
+
+  const loading = token && (state.status === "idle" || state.status === "loading");
+
+  return (
+    <div className="ws">
+      <section className="masthead">
+        <div className="dotbar">
+          <span className="cap mono">+</span>
+          <span className="dotbar-txt mono">SECURERAG / IOC EXPLORER</span>
+          <span className="lead" />
+          <span className="dotbar-txt mono"><span className="g">v3.0</span></span>
+          <span className="cap mono">+</span>
+        </div>
+        <h1 className="mega"><WordWipe text="IOC EXPLORER" delay={0.2} /></h1>
+      </section>
+
+      <section className="panel">
+        <span className="stamp mono">[ x:01 ]</span>
+        <div className="panel-head">
+          <SysLabel title="CORRELATED INDICATORS" index="02" status={token ? "LIVE" : "LOCKED"} />
+          {token && state.status === "ready" && <span className="refresh mono">{state.rows.length} INDICATORS</span>}
+        </div>
+
+        {!token && <LoginGate onLogin={login} />}
+
+        {loading && (
+          <p className="mono load-msg">// QUERYING CORRELATION ENGINE…</p>
+        )}
+
+        {token && state.status === "error" && (
+          <div className="state-err">
+            <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {state.error}</p>
+            <button type="button" className="ioc-btn mono" onClick={retry}>RETRY</button>
+          </div>
+        )}
+
+        {token && state.status === "ready" && state.rows.length === 0 && (
+          <p className="mono load-msg">// NO CORRELATED INDICATORS YET — INGEST LOGS TO POPULATE.</p>
+        )}
+
+        {token && state.status === "ready" && state.rows.length > 0 && (
+          <div className="ev-wrap">
+            <table className="ev">
+              <thead>
+                <tr>
+                  <th>INDICATOR</th>
+                  <th>CATEGORY</th>
+                  <th>ROLE</th>
+                  <th>RISK</th>
+                  <th className="num">FILES</th>
+                  <th className="num">FREQ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.rows.map((r) => (
+                  <tr key={r.value}>
+                    <td className="mono artifact" title={r.value}>{r.value}</td>
+                    <td className="mono">{r.category}</td>
+                    <td className="mono">{r.role}</td>
+                    <td><Sev level={r.risk} /></td>
+                    <td className="mono num">{r.files}</td>
+                    <td className="mono num">{r.freq}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <footer className="footer mono">
+        <span>© 2026 SecureRAG</span>
+        <span>Developed by Hemanth A R</span>
+      </footer>
+    </div>
+  );
+}
+
 function ModuleView({ id }) {
   const reduce = useReducedMotion();
   const label = NAV_BY_ID[id]?.label;
@@ -502,7 +697,13 @@ export default function App() {
         </div>
         <main className="main">
           <AnimatePresence mode="wait">
-            {active === "dashboard" ? <Workstation key="ws" /> : <ModuleView key={active} id={active} />}
+            {active === "dashboard" ? (
+              <Workstation key="ws" />
+            ) : active === "ioc" ? (
+              <IOCExplorer key="ioc" />
+            ) : (
+              <ModuleView key={active} id={active} />
+            )}
           </AnimatePresence>
         </main>
       </div>
@@ -699,6 +900,22 @@ body{ margin:0; background:var(--canvas); }
   .readout:first-child{ border-top:0; }
   .dotbar-txt:first-of-type{ white-space:normal; }
 }
+
+/* ---- IOC Explorer states ---- */
+.load-msg{ display:flex; align-items:center; gap:var(--space-2); color:var(--muted); font-size:0.75rem;
+  letter-spacing:0.02em; padding:var(--space-2) 0; }
+.state-err{ display:flex; align-items:center; gap:var(--space-4); flex-wrap:wrap; }
+.state-err .mono{ display:flex; align-items:center; gap:var(--space-2); color:#ff8c42; font-size:0.75rem; }
+.ioc-login{ display:flex; flex-direction:column; gap:var(--space-3); }
+.ioc-fields{ display:flex; gap:var(--space-3); flex-wrap:wrap; }
+.ioc-input{ flex:1 1 160px; min-width:0; background:var(--canvas); border:1px solid var(--hairline);
+  color:var(--text); font-family:var(--mono); font-size:0.75rem; padding:var(--space-3); }
+.ioc-input::placeholder{ color:var(--dim); }
+.ioc-btn{ cursor:pointer; background:rgba(0,255,136,0.06); border:1px solid rgba(0,255,136,0.4); color:var(--green);
+  font-size:0.6875rem; letter-spacing:0.08em; padding:var(--space-3) var(--space-5); transition:background .18s ease; }
+.ioc-btn:hover:not(:disabled){ background:rgba(0,255,136,0.12); }
+.ioc-btn:disabled{ opacity:0.5; cursor:not-allowed; }
+.ioc-err{ display:flex; align-items:center; gap:var(--space-2); color:#ff4444; font-size:0.7rem; }
 
 @media (prefers-reduced-motion: reduce){
   .srag *, .srag *::before, .srag *::after{
