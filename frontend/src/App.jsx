@@ -106,6 +106,11 @@ async function fetchStats(token) {
   return { readouts: data.readouts || {}, evidence: data.evidence || [] };
 }
 
+async function fetchReport(token, analysis) {
+  const data = await apiFetch("/report", { token, method: "POST", body: { analysis } });
+  return data.report;
+}
+
 /* ================================================================== */
 /*  Severity — single source of truth (colours used ONLY on severity) */
 /* ================================================================== */
@@ -966,7 +971,7 @@ function TimelineView() {
 /* ================================================================== */
 /*  Investigation — composite threat analysis from POST /query        */
 /* ================================================================== */
-function InvestigationView() {
+function InvestigationView({ onResult }) {
   const { token, login, logout } = useAuth();
   const [query, setQuery] = useState("");
   const [state, setState] = useState({ status: "idle", result: null, error: "" });
@@ -975,7 +980,10 @@ function InvestigationView() {
     if (!token || !query.trim()) return;
     setState({ status: "loading", result: null, error: "" });
     fetchQuery(token, query).then(
-      (result) => setState({ status: "ready", result, error: "" }),
+      (result) => {
+        setState({ status: "ready", result, error: "" });
+        onResult?.({ query, result });
+      },
       (e) => {
         if (e.status === 401) { logout(); setState({ status: "idle", result: null, error: "" }); }
         else setState({ status: "error", result: null, error: e.message || "Request failed" });
@@ -1202,6 +1210,105 @@ function InvestigationView() {
   );
 }
 
+/* ================================================================== */
+/*  Reports — formats the last Investigation result via POST /report  */
+/* ================================================================== */
+function ReportsView({ lastInvestigation }) {
+  const { token, login, logout } = useAuth();
+  const [state, setState] = useState({ status: "idle", report: "", error: "" });
+
+  const generate = () => {
+    if (!token || !lastInvestigation) return;
+    setState({ status: "loading", report: "", error: "" });
+    fetchReport(token, lastInvestigation.result.analysis).then(
+      (report) => setState({ status: "ready", report, error: "" }),
+      (e) => {
+        if (e.status === 401) { logout(); setState({ status: "idle", report: "", error: "" }); }
+        else setState({ status: "error", report: "", error: e.message || "Request failed" });
+      }
+    );
+  };
+
+  const copy = () => { navigator.clipboard?.writeText(state.report); };
+
+  const download = () => {
+    const blob = new Blob([state.report], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "securerag-incident-report.txt";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="ws">
+      <section className="masthead">
+        <div className="dotbar">
+          <span className="cap mono">+</span>
+          <span className="dotbar-txt mono">SECURERAG / REPORTS</span>
+          <span className="lead" />
+          <span className="dotbar-txt mono"><span className="g">v3.0</span></span>
+          <span className="cap mono">+</span>
+        </div>
+        <h1 className="mega"><WordWipe text="REPORTS" delay={0.2} /></h1>
+      </section>
+
+      <section className="panel">
+        <span className="stamp mono">[ x:01 ]</span>
+        <div className="panel-head">
+          <SysLabel title="INCIDENT REPORT BUILDER" index="08" status={token ? "LIVE" : "LOCKED"} />
+        </div>
+
+        {!token && <LoginGate onLogin={login} />}
+
+        {token && !lastInvestigation && (
+          <p className="mono load-msg">// NO INVESTIGATION RESULT AVAILABLE. RUN AN INVESTIGATION QUERY FIRST.</p>
+        )}
+
+        {token && lastInvestigation && (
+          <>
+            <p className="mono dim">// SOURCE QUERY: {lastInvestigation.query}</p>
+            <div className="ioc-fields" style={{ marginBottom: "var(--space-5)" }}>
+              <button type="button" className="ioc-btn mono" onClick={generate} disabled={state.status === "loading"}>
+                {state.status === "loading" ? "…" : "GENERATE REPORT"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {token && state.status === "loading" && (
+          <p className="mono load-msg">// FORMATTING INCIDENT REPORT…</p>
+        )}
+
+        {token && state.status === "error" && (
+          <div className="state-err">
+            <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {state.error}</p>
+            <button type="button" className="ioc-btn mono" onClick={generate}>RETRY</button>
+          </div>
+        )}
+
+        {token && state.status === "ready" && (
+          <>
+            <pre className="mono report-pre">{state.report}</pre>
+            <div className="ioc-fields">
+              <button type="button" className="ioc-btn mono" onClick={copy}>COPY</button>
+              <button type="button" className="ioc-btn mono" onClick={download}>DOWNLOAD .TXT</button>
+            </div>
+          </>
+        )}
+      </section>
+
+      <footer className="footer mono">
+        <span>© 2026 SecureRAG</span>
+        <span>Developed by Hemanth A R</span>
+      </footer>
+    </div>
+  );
+}
+
 function ModuleView({ id }) {
   const reduce = useReducedMotion();
   const label = NAV_BY_ID[id]?.label;
@@ -1236,6 +1343,7 @@ function ModuleView({ id }) {
 export default function App() {
   const [active, setActive] = useState("dashboard");
   const [open, setOpen] = useState(false);
+  const [lastInvestigation, setLastInvestigation] = useState(null);
   const select = (id) => { setActive(id); setOpen(false); };
 
   return (
@@ -1264,7 +1372,9 @@ export default function App() {
             ) : active === "timeline" ? (
               <TimelineView key="timeline" />
             ) : active === "investigation" ? (
-              <InvestigationView key="investigation" />
+              <InvestigationView key="investigation" onResult={setLastInvestigation} />
+            ) : active === "reports" ? (
+              <ReportsView key="reports" lastInvestigation={lastInvestigation} />
             ) : (
               <ModuleView key={active} id={active} />
             )}
@@ -1491,6 +1601,10 @@ body{ margin:0; background:var(--canvas); }
 .kc-tactic{ color:var(--text); }
 .kc-tech{ font-size:0.625rem; }
 .kc-arrow{ color:var(--dim); margin-left:var(--space-2); }
+
+/* ---- Reports view ---- */
+.report-pre{ white-space:pre-wrap; word-break:break-word; color:var(--text); font-size:0.75rem; line-height:1.6;
+  background:var(--surface); border:1px solid var(--hairline); padding:var(--space-4); margin:0 0 var(--space-5); }
 
 @media (prefers-reduced-motion: reduce){
   .srag *, .srag *::before, .srag *::after{
