@@ -76,6 +76,16 @@ async function fetchCorrelations(token) {
   }));
 }
 
+async function fetchMitreMap(token, text) {
+  const data = await apiFetch("/mitre-map", { token, method: "POST", body: { text } });
+  const techniques = data.techniques || [];
+  return {
+    techniques,
+    killChain: data.kill_chain || [],
+    total: data.total_techniques ?? techniques.length,
+  };
+}
+
 /* ================================================================== */
 /*  Severity — single source of truth (colours used ONLY on severity) */
 /* ================================================================== */
@@ -644,6 +654,128 @@ function IOCExplorer() {
   );
 }
 
+/* ================================================================== */
+/*  MITRE ATT&CK — live technique mapping from POST /mitre-map        */
+/* ================================================================== */
+function MitreView() {
+  const { token, login, logout } = useAuth();
+  const [text, setText] = useState("");
+  const [state, setState] = useState({ status: "idle", techniques: [], killChain: [], total: 0, error: "" });
+
+  // Submit-triggered (no auto-fetch effect needed — /mitre-map requires text).
+  const analyze = () => {
+    if (!token || !text.trim()) return;
+    setState({ status: "loading", techniques: [], killChain: [], total: 0, error: "" });
+    fetchMitreMap(token, text).then(
+      (r) => setState({ status: "ready", techniques: r.techniques, killChain: r.killChain, total: r.total, error: "" }),
+      (e) => {
+        if (e.status === 401) { logout(); setState({ status: "idle", techniques: [], killChain: [], total: 0, error: "" }); }
+        else setState({ status: "error", techniques: [], killChain: [], total: 0, error: e.message || "Request failed" });
+      }
+    );
+  };
+
+  return (
+    <div className="ws">
+      <section className="masthead">
+        <div className="dotbar">
+          <span className="cap mono">+</span>
+          <span className="dotbar-txt mono">SECURERAG / MITRE ATT&amp;CK</span>
+          <span className="lead" />
+          <span className="dotbar-txt mono"><span className="g">v3.0</span></span>
+          <span className="cap mono">+</span>
+        </div>
+        <h1 className="mega"><WordWipe text="MITRE ATT&CK" delay={0.2} /></h1>
+      </section>
+
+      <section className="panel">
+        <span className="stamp mono">[ x:01 ]</span>
+        <div className="panel-head">
+          <SysLabel title="TECHNIQUE MAPPER" index="03" status={token ? "LIVE" : "LOCKED"} />
+          {token && state.status === "ready" && <span className="refresh mono">{state.total} TECHNIQUES</span>}
+        </div>
+
+        {!token && <LoginGate onLogin={login} />}
+
+        {token && (
+          <div className="mitre-input">
+            <textarea
+              className="ioc-input mono mitre-textarea"
+              placeholder="paste log text or analyst notes to map against ATT&CK techniques…"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={5}
+              aria-label="Text to analyze for MITRE ATT&CK techniques"
+            />
+            <button type="button" className="ioc-btn mono" onClick={analyze} disabled={state.status === "loading" || !text.trim()}>
+              {state.status === "loading" ? "…" : "ANALYZE"}
+            </button>
+          </div>
+        )}
+
+        {token && state.status === "loading" && (
+          <p className="mono load-msg">// MAPPING ATT&amp;CK TECHNIQUES…</p>
+        )}
+
+        {token && state.status === "error" && (
+          <div className="state-err">
+            <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {state.error}</p>
+            <button type="button" className="ioc-btn mono" onClick={analyze}>RETRY</button>
+          </div>
+        )}
+
+        {token && state.status === "ready" && state.techniques.length === 0 && (
+          <p className="mono load-msg">// NO TECHNIQUES DETECTED IN PROVIDED TEXT.</p>
+        )}
+
+        {token && state.status === "ready" && state.killChain.length > 0 && (
+          <ol className="killchain" aria-label="ATT&CK kill chain order">
+            {state.killChain.map((t, i) => (
+              <li className="kc-step mono" key={`${t.technique}-${i}`}>
+                <span className="kc-tactic">{t.tactic}</span>
+                <span className="kc-tech dim">{t.technique}</span>
+                {i < state.killChain.length - 1 && <ArrowRight size={12} className="kc-arrow" aria-hidden="true" />}
+              </li>
+            ))}
+          </ol>
+        )}
+
+        {token && state.status === "ready" && state.techniques.length > 0 && (
+          <div className="ev-wrap">
+            <table className="ev">
+              <thead>
+                <tr>
+                  <th>TECHNIQUE</th>
+                  <th>NAME</th>
+                  <th>TACTIC</th>
+                  <th>CONFIDENCE</th>
+                  <th>EVIDENCE</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.techniques.map((t, i) => (
+                  <tr key={`${t.technique}-${i}`}>
+                    <td className="mono artifact">{t.technique}</td>
+                    <td className="mono">{t.name}</td>
+                    <td className="mono">{t.tactic}</td>
+                    <td><Sev level={t.confidence} /></td>
+                    <td className="mono logged">{(t.evidence || []).join(", ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <footer className="footer mono">
+        <span>© 2026 SecureRAG</span>
+        <span>Developed by Hemanth A R</span>
+      </footer>
+    </div>
+  );
+}
+
 function ModuleView({ id }) {
   const reduce = useReducedMotion();
   const label = NAV_BY_ID[id]?.label;
@@ -701,6 +833,8 @@ export default function App() {
               <Workstation key="ws" />
             ) : active === "ioc" ? (
               <IOCExplorer key="ioc" />
+            ) : active === "mitre" ? (
+              <MitreView key="mitre" />
             ) : (
               <ModuleView key={active} id={active} />
             )}
@@ -916,6 +1050,17 @@ body{ margin:0; background:var(--canvas); }
 .ioc-btn:hover:not(:disabled){ background:rgba(0,255,136,0.12); }
 .ioc-btn:disabled{ opacity:0.5; cursor:not-allowed; }
 .ioc-err{ display:flex; align-items:center; gap:var(--space-2); color:#ff4444; font-size:0.7rem; }
+
+/* ---- MITRE technique mapper ---- */
+.mitre-input{ display:flex; flex-direction:column; gap:var(--space-3); margin-bottom:var(--space-5); }
+.mitre-textarea{ width:100%; resize:vertical; min-height:96px; line-height:1.5; }
+.killchain{ list-style:none; margin:0 0 var(--space-5); padding:0; display:flex; flex-wrap:wrap;
+  align-items:center; gap:var(--space-2); }
+.kc-step{ display:inline-flex; align-items:center; gap:var(--space-2); font-size:0.6875rem; letter-spacing:0.04em;
+  background:var(--surface); border:1px solid var(--hairline); padding:var(--space-2) var(--space-3); }
+.kc-tactic{ color:var(--text); }
+.kc-tech{ font-size:0.625rem; }
+.kc-arrow{ color:var(--dim); margin-left:var(--space-2); }
 
 @media (prefers-reduced-motion: reduce){
   .srag *, .srag *::before, .srag *::after{
