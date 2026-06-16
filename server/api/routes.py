@@ -303,6 +303,22 @@ def query_system():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+@api_bp.route('/stats', methods=['GET'])
+@jwt_required()
+def stats_endpoint():
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        sqlite = current_app.sqlite_store
+        return jsonify({
+            "readouts": sqlite.get_dashboard_readouts(),
+            "evidence": sqlite.get_evidence_log()
+        }), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @api_bp.route('/report', methods=['POST'])
 @jwt_required()
 def report_endpoint():

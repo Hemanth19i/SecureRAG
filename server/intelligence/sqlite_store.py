@@ -369,3 +369,85 @@ class SQLiteStore:
         except Exception as e:
             logger.error("Error getting global correlations: %s", e)
             return {}
+
+    def get_dashboard_readouts(self):
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT COUNT(*) AS n FROM file_uploads")
+            docs_indexed = cursor.fetchone()["n"]
+
+            cursor.execute("SELECT COUNT(*) AS n FROM extracted_iocs")
+            iocs_extracted = cursor.fetchone()["n"]
+
+            cursor.execute("SELECT COUNT(DISTINCT technique_id) AS n FROM chunk_mitre_mapping")
+            mitre_mapped = cursor.fetchone()["n"]
+
+            cursor.execute(
+                "SELECT COUNT(DISTINCT chunk_id) AS n FROM chunk_mitre_mapping WHERE confidence = 'HIGH'"
+            )
+            threats_critical = cursor.fetchone()["n"]
+
+            conn.close()
+            return {
+                "docs_indexed": docs_indexed,
+                "iocs_extracted": iocs_extracted,
+                "mitre_mapped": mitre_mapped,
+                "threats_critical": threats_critical,
+            }
+        except Exception as e:
+            logger.error("Error getting dashboard readouts: %s", e)
+            return {"docs_indexed": 0, "iocs_extracted": 0, "mitre_mapped": 0, "threats_critical": 0}
+
+    def get_evidence_log(self):
+        SEVERITY_RANK_LABEL = {3: "HIGH", 2: "MEDIUM", 1: "LOW", 0: "NONE"}
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT
+              fu.upload_id,
+              fu.filename,
+              fu.timestamp AS ingested_at,
+              COALESCE(ioc.cnt, 0) AS ioc_count,
+              COALESCE(mitre.cnt, 0) AS mitre_count,
+              COALESCE(mitre.max_sev_rank, 0) AS severity_rank
+            FROM file_uploads fu
+            LEFT JOIN (
+              SELECT lc.upload_id, COUNT(DISTINCT cim.ioc_value) AS cnt
+              FROM log_chunks lc
+              JOIN chunk_ioc_mapping cim ON cim.chunk_id = lc.chunk_id
+              GROUP BY lc.upload_id
+            ) ioc ON ioc.upload_id = fu.upload_id
+            LEFT JOIN (
+              SELECT lc.upload_id,
+                     COUNT(DISTINCT cmm.technique_id) AS cnt,
+                     MAX(CASE cmm.confidence
+                           WHEN 'HIGH' THEN 3
+                           WHEN 'MEDIUM' THEN 2
+                           WHEN 'LOW' THEN 1
+                           ELSE 0 END) AS max_sev_rank
+              FROM log_chunks lc
+              JOIN chunk_mitre_mapping cmm ON cmm.chunk_id = lc.chunk_id
+              GROUP BY lc.upload_id
+            ) mitre ON mitre.upload_id = fu.upload_id
+            ORDER BY fu.timestamp DESC
+            """)
+            rows = cursor.fetchall()
+            conn.close()
+
+            return [
+                {
+                    "upload_id": row["upload_id"],
+                    "filename": row["filename"],
+                    "severity": SEVERITY_RANK_LABEL.get(row["severity_rank"], "NONE"),
+                    "ioc_count": row["ioc_count"],
+                    "mitre_count": row["mitre_count"],
+                    "ingested_at": row["ingested_at"],
+                }
+                for row in rows
+            ]
+        except Exception as e:
+            logger.error("Error getting evidence log: %s", e)
+            return []
