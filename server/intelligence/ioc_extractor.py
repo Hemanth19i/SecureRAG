@@ -1,4 +1,5 @@
 import re
+import ipaddress
 import logging
 import traceback
 
@@ -27,6 +28,21 @@ def _is_valid_ipv4(ip: str) -> bool:
         return False
 
 
+def _refang(text: str) -> str:
+    """Normalise common defanged indicators back to canonical form so the
+    extractors below can match them. Handles hxxp[s]:// -> http[s]://,
+    [.]/(.)/{.}/[dot]/(dot) -> '.', [:] -> ':', and [at]/(at)/[@]/(@) -> '@'.
+    A no-op on text that contains no defang markers.
+    """
+    t = text
+    t = t.replace("[.]", ".").replace("(.)", ".").replace("{.}", ".")
+    t = re.sub(r"\[dot\]|\(dot\)", ".", t, flags=re.IGNORECASE)
+    t = t.replace("[:]", ":")
+    t = re.sub(r"\[at\]|\(at\)|\[@\]|\(@\)", "@", t, flags=re.IGNORECASE)
+    t = re.sub(r"h[xX]{2}p(s?)://", r"http\1://", t)
+    return t
+
+
 def extract_iocs(text: str) -> dict:
     """
     Extracts IPs, domains, hashes, CVEs, and emails from text.
@@ -37,19 +53,39 @@ def extract_iocs(text: str) -> dict:
             "domains": [],
             "hashes": [],
             "cves": [],
-            "emails": []
+            "emails": [],
+            # Additive indicator types — the five keys above are unchanged.
+            "ipv6": [],
+            "urls": []
         }
 
         if not text:
             return iocs
 
+        # Refang defanged indicators (hxxp://, 1.2.3[.]4, evil[.]com, a[at]b)
+        # to canonical form so every extractor below matches them. No-op on
+        # text without defang markers, so existing behaviour is preserved.
+        refanged = _refang(text)
+
         # Extract IPs (basic IPv4, octet-validated to 0-255)
         ip_pattern = r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'
-        iocs["ips"] = list({ip for ip in re.findall(ip_pattern, text) if _is_valid_ipv4(ip)})
+        iocs["ips"] = list({ip for ip in re.findall(ip_pattern, refanged) if _is_valid_ipv4(ip)})
+
+        # Extract IPv6 — candidate tokens validated via the stdlib ipaddress
+        # module so timestamps (02:11:44) and MAC addresses are not misread.
+        ipv6_found = []
+        for cand in re.findall(r'(?<![\w:.])[A-Fa-f0-9:]{2,}(?![\w:.])', refanged):
+            if cand.count(":") >= 2:
+                try:
+                    if ipaddress.ip_address(cand).version == 6:
+                        ipv6_found.append(cand)
+                except ValueError:
+                    pass
+        iocs["ipv6"] = list(set(ipv6_found))
 
         # Extract domains
         domain_pattern = r'\b[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b'
-        domains = set(re.findall(domain_pattern, text))
+        domains = set(re.findall(domain_pattern, refanged))
         # Drop IP-shaped matches and bare filenames (e.g. "auth.log", "payload.bin")
         iocs["domains"] = [
             d for d in domains
@@ -57,19 +93,29 @@ def extract_iocs(text: str) -> dict:
             and d.rsplit(".", 1)[-1].lower() not in FILE_EXTENSIONS
         ]
 
-        # Extract Hashes (MD5 = 32 hex, SHA256 = 64 hex)
+        # Extract Hashes (MD5 = 32, SHA1 = 40, SHA256 = 64 hex)
         md5_pattern = r'\b[a-fA-F0-9]{32}\b'
+        sha1_pattern = r'\b[a-fA-F0-9]{40}\b'
         sha256_pattern = r'\b[a-fA-F0-9]{64}\b'
-        hashes = set(re.findall(md5_pattern, text) + re.findall(sha256_pattern, text))
+        hashes = set(
+            re.findall(md5_pattern, refanged)
+            + re.findall(sha1_pattern, refanged)
+            + re.findall(sha256_pattern, refanged)
+        )
         iocs["hashes"] = list(hashes)
 
         # Extract CVEs
         cve_pattern = r'\bCVE-\d{4}-\d{4,7}\b'
-        iocs["cves"] = list(set(re.findall(cve_pattern, text, re.IGNORECASE)))
+        iocs["cves"] = list(set(re.findall(cve_pattern, refanged, re.IGNORECASE)))
 
         # Extract Emails
         email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b'
-        iocs["emails"] = list(set(re.findall(email_pattern, text)))
+        iocs["emails"] = list(set(re.findall(email_pattern, refanged)))
+
+        # Extract URLs (http/https; defanged hxxp:// already refanged above)
+        url_pattern = r'https?://[^\s<>"\'\)\]]+'
+        urls = re.findall(url_pattern, refanged, re.IGNORECASE)
+        iocs["urls"] = list({u.rstrip(".,;:'\")]") for u in urls})
 
         return iocs
     except Exception as e:
