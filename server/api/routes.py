@@ -10,7 +10,7 @@ from rag.embedder import Embedder
 from intelligence.ioc_extractor import extract_iocs
 from intelligence.gemini_analyzer import analyze_threat, generate_incident_report
 from intelligence.mitre_mapper import map_to_mitre, build_kill_chain
-from intelligence.timeline_gen import generate_timeline, format_timeline_string, extract_timestamps
+from intelligence.timeline_gen import generate_timeline, format_timeline_string
 from intelligence.correlator import correlate_iocs, get_correlation_summary, generate_analyst_insights
 
 logger = logging.getLogger(__name__)
@@ -129,17 +129,10 @@ def upload_log():
                 for match in mitre_matches:
                     sqlite.store_mitre_mapping(chunk_id, match["technique"], match["tactic"], match.get("confidence", "UNKNOWN"), conn=conn)
 
-                # 4. Timeline generation
-                timeline_events = extract_timestamps(chunk_text_content)
+                # 4. Timeline generation — same pipeline as /query and /timeline
+                timeline_events = generate_timeline(chunk_text_content, mitre_matches)
                 for ev in timeline_events:
-                    severity = "LOW"
-                    if any(k in ev["event"].lower() for k in ["fail", "deny", "malware"]):
-                        severity = "MEDIUM"
-                    sqlite.store_timeline_event(chunk_id, ev["timestamp"], ev["event"], severity, conn=conn)
-
-                if not timeline_events and mitre_matches:
-                    desc = chunk_text_content.strip()[:100] + ("..." if len(chunk_text_content.strip()) > 100 else "")
-                    sqlite.store_timeline_event(chunk_id, "T+unknown", f"[{mitre_matches[0]['tactic'].upper()}] {desc}", mitre_matches[0].get("confidence", "UNKNOWN"), conn=conn)
+                    sqlite.store_timeline_event(chunk_id, ev["timestamp"], ev["description"], ev["severity"], conn=conn)
 
             sqlite.store_file_upload(file_hash, upload_id, file.filename, conn=conn)
 

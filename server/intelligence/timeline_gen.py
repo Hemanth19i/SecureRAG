@@ -62,6 +62,21 @@ def parse_ts(ts):
             continue
     return None
 
+def normalize_timestamp(ts):
+    """Canonicalise a recognised timestamp to 'YYYY-MM-DD HH:MM:SS'.
+
+    Dated formats (ISO and Apache) are normalised to one canonical form so the
+    stored and returned timelines agree. Time-only logs (which parse to a 1900
+    placeholder date) and the 'T+unknown' marker are passed through unchanged so
+    no fabricated dates enter the timeline.
+    """
+    if not ts or ts == "T+unknown":
+        return ts
+    dt = parse_ts(ts)
+    if dt is None or dt.year == 1900:
+        return ts
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
 def generate_timeline(log_text: str, mitre_results: list) -> list[dict]:
     try:
         events = extract_timestamps(log_text)
@@ -101,7 +116,7 @@ def generate_timeline(log_text: str, mitre_results: list) -> list[dict]:
             confidence = mitre_match[0].get("confidence", "LOW") if mitre_match else "LOW"
             phase = mitre_match[0].get("phase", "") if mitre_match else ""
             
-            ts = e["timestamp"]
+            ts = normalize_timestamp(e["timestamp"])
             # Time bucket: group by minute -> YYYY-MM-DD HH:MM
             time_bucket = ts[:16] if len(ts) >= 16 else ts
             
