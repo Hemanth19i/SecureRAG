@@ -86,6 +86,12 @@ async function fetchMitreMap(token, text) {
   };
 }
 
+async function fetchTimeline(token, text) {
+  const data = await apiFetch("/timeline", { token, method: "POST", body: { text } });
+  const events = data.timeline || [];
+  return { events, total: data.total_events ?? events.length };
+}
+
 /* ================================================================== */
 /*  Severity — single source of truth (colours used ONLY on severity) */
 /* ================================================================== */
@@ -776,6 +782,117 @@ function MitreView() {
   );
 }
 
+/* ================================================================== */
+/*  Timeline — chronological event reconstruction from POST /timeline */
+/* ================================================================== */
+function TimelineView() {
+  const { token, login, logout } = useAuth();
+  const [text, setText] = useState("");
+  const [state, setState] = useState({ status: "idle", events: [], total: 0, error: "" });
+
+  // Submit-triggered (no auto-fetch effect needed — /timeline requires text).
+  const analyze = () => {
+    if (!token || !text.trim()) return;
+    setState({ status: "loading", events: [], total: 0, error: "" });
+    fetchTimeline(token, text).then(
+      (r) => setState({ status: "ready", events: r.events, total: r.total, error: "" }),
+      (e) => {
+        if (e.status === 401) { logout(); setState({ status: "idle", events: [], total: 0, error: "" }); }
+        else setState({ status: "error", events: [], total: 0, error: e.message || "Request failed" });
+      }
+    );
+  };
+
+  return (
+    <div className="ws">
+      <section className="masthead">
+        <div className="dotbar">
+          <span className="cap mono">+</span>
+          <span className="dotbar-txt mono">SECURERAG / TIMELINE</span>
+          <span className="lead" />
+          <span className="dotbar-txt mono"><span className="g">v3.0</span></span>
+          <span className="cap mono">+</span>
+        </div>
+        <h1 className="mega"><WordWipe text="TIMELINE" delay={0.2} /></h1>
+      </section>
+
+      <section className="panel">
+        <span className="stamp mono">[ x:01 ]</span>
+        <div className="panel-head">
+          <SysLabel title="EVENT RECONSTRUCTION" index="05" status={token ? "LIVE" : "LOCKED"} />
+          {token && state.status === "ready" && <span className="refresh mono">{state.total} EVENTS</span>}
+        </div>
+
+        {!token && <LoginGate onLogin={login} />}
+
+        {token && (
+          <div className="mitre-input">
+            <textarea
+              className="ioc-input mono mitre-textarea"
+              placeholder="paste log text to reconstruct a chronological event timeline…"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={5}
+              aria-label="Text to analyze for timeline reconstruction"
+            />
+            <button type="button" className="ioc-btn mono" onClick={analyze} disabled={state.status === "loading" || !text.trim()}>
+              {state.status === "loading" ? "…" : "ANALYZE"}
+            </button>
+          </div>
+        )}
+
+        {token && state.status === "loading" && (
+          <p className="mono load-msg">// RECONSTRUCTING TIMELINE…</p>
+        )}
+
+        {token && state.status === "error" && (
+          <div className="state-err">
+            <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {state.error}</p>
+            <button type="button" className="ioc-btn mono" onClick={analyze}>RETRY</button>
+          </div>
+        )}
+
+        {token && state.status === "ready" && state.events.length === 0 && (
+          <p className="mono load-msg">// NO TIMESTAMPED EVENTS FOUND IN PROVIDED TEXT.</p>
+        )}
+
+        {token && state.status === "ready" && state.events.length > 0 && (
+          <div className="ev-wrap">
+            <table className="ev">
+              <thead>
+                <tr>
+                  <th>TIMESTAMP</th>
+                  <th>EVENT TYPE</th>
+                  <th>SEVERITY</th>
+                  <th>DESCRIPTION</th>
+                  <th>MITRE</th>
+                </tr>
+              </thead>
+              <tbody>
+                {/* events arrive pre-sorted chronologically from generate_timeline */}
+                {state.events.map((e, i) => (
+                  <tr key={`${e.timestamp}-${i}`}>
+                    <td className="mono logged">{e.timestamp}</td>
+                    <td className="mono">{e.event_type}</td>
+                    <td><Sev level={e.severity} /></td>
+                    <td className="mono">{e.description}</td>
+                    <td className="mono artifact">{e.mitre_technique}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <footer className="footer mono">
+        <span>© 2026 SecureRAG</span>
+        <span>Developed by Hemanth A R</span>
+      </footer>
+    </div>
+  );
+}
+
 function ModuleView({ id }) {
   const reduce = useReducedMotion();
   const label = NAV_BY_ID[id]?.label;
@@ -835,6 +952,8 @@ export default function App() {
               <IOCExplorer key="ioc" />
             ) : active === "mitre" ? (
               <MitreView key="mitre" />
+            ) : active === "timeline" ? (
+              <TimelineView key="timeline" />
             ) : (
               <ModuleView key={active} id={active} />
             )}
