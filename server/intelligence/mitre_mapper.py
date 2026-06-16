@@ -30,12 +30,22 @@ MITRE_PATTERNS = {
         "name": "Remote Services", "phase": "TA0008"
     },
     r"recon|scan|nmap|port scan": {
-        "tactic": "Reconnaissance", "technique": "T1046",
-        "name": "Network Service Discovery", "phase": "TA0043"
+        "tactic": "Discovery", "technique": "T1046",
+        "name": "Network Service Discovery", "phase": "TA0007"
     },
     r"persistence|backdoor|cron|startup": {
         "tactic": "Persistence", "technique": "T1053",
         "name": "Scheduled Task", "phase": "TA0003"
+    },
+    # Consolidated from timeline-only logic — MITRE_PATTERNS is the single
+    # source of truth for technique classification.
+    r"malware|ransomware|trojan|virus": {
+        "tactic": "Execution", "technique": "T1204",
+        "name": "User Execution", "phase": "TA0002"
+    },
+    r"backdoor|rootkit|persistence": {
+        "tactic": "Persistence", "technique": "T1547",
+        "name": "Boot or Logon Autostart Execution", "phase": "TA0003"
     }
 }
 
@@ -126,8 +136,20 @@ def map_to_mitre(text: str) -> list[dict]:
 def build_kill_chain(mitre_results: list) -> list[dict]:
     try:
         phase_order = {
-            "TA0043": 1, "TA0001": 2, "TA0002": 3, "TA0003": 4, 
-            "TA0004": 5, "TA0006": 6, "TA0008": 7, "TA0010": 8
+            "TA0043": 1,   # Reconnaissance
+            "TA0042": 2,   # Resource Development
+            "TA0001": 3,   # Initial Access
+            "TA0002": 4,   # Execution
+            "TA0003": 5,   # Persistence
+            "TA0004": 6,   # Privilege Escalation
+            "TA0005": 7,   # Defense Evasion
+            "TA0006": 8,   # Credential Access
+            "TA0007": 9,   # Discovery
+            "TA0008": 10,  # Lateral Movement
+            "TA0009": 11,  # Collection
+            "TA0011": 12,  # Command and Control
+            "TA0010": 13,  # Exfiltration
+            "TA0040": 14,  # Impact
         }
         return sorted(mitre_results, key=lambda x: phase_order.get(x.get("phase", ""), 99))
     except Exception as e:

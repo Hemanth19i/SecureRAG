@@ -104,8 +104,20 @@ def generate_timeline(log_text: str, mitre_results: list) -> list[dict]:
         
         # TA phase order mapping for final kill chain sort
         phase_order_map = {
-            "TA0043": 1, "TA0001": 2, "TA0002": 3, "TA0003": 4, 
-            "TA0004": 5, "TA0006": 6, "TA0008": 7, "TA0010": 8
+            "TA0043": 1,   # Reconnaissance
+            "TA0042": 2,   # Resource Development
+            "TA0001": 3,   # Initial Access
+            "TA0002": 4,   # Execution
+            "TA0003": 5,   # Persistence
+            "TA0004": 6,   # Privilege Escalation
+            "TA0005": 7,   # Defense Evasion
+            "TA0006": 8,   # Credential Access
+            "TA0007": 9,   # Discovery
+            "TA0008": 10,  # Lateral Movement
+            "TA0009": 11,  # Collection
+            "TA0011": 12,  # Command and Control
+            "TA0010": 13,  # Exfiltration
+            "TA0040": 14,  # Impact
         }
         
         for e in events:
@@ -120,21 +132,8 @@ def generate_timeline(log_text: str, mitre_results: list) -> list[dict]:
             # Time bucket: group by minute -> YYYY-MM-DD HH:MM
             time_bucket = ts[:16] if len(ts) >= 16 else ts
             
-            desc_lower = e["event"].lower()
-            if any(k in desc_lower for k in ["malware", "ransomware", "trojan", "virus"]):
-                tactic = "EXECUTION"
-                technique = "T1204"
-                phase = "TA0002"
-            elif any(k in desc_lower for k in ["backdoor", "rootkit", "persistence"]):
-                tactic = "PERSISTENCE"
-                technique = "T1547"
-                phase = "TA0003"
-            elif "firewall deny" in desc_lower or "firewall block" in desc_lower or ("deny" in desc_lower and "port" in desc_lower):
-                tactic = "RECONNAISSANCE"
-                technique = "T1046"
-                phase = "TA0043"
-                confidence = "LOW"
-            
+            # Technique classification comes solely from map_to_mitre above —
+            # mitre_mapper.MITRE_PATTERNS is the single source of truth.
             key = (tactic.upper(), technique)
             bucket_key = (key, time_bucket)
             
