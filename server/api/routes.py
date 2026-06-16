@@ -120,7 +120,7 @@ def upload_log():
                 for ioc_type, ioc_list in chunk_iocs.items():
                     if ioc_type == "error": continue
                     for ioc_val in ioc_list:
-                        TYPE_MAP = {"ips": "ip", "hashes": "hash", "cves": "cve", "domains": "domain", "emails": "email"}
+                        TYPE_MAP = {"ips": "ip", "hashes": "hash", "cves": "cve", "domains": "domain", "emails": "email", "ipv6": "ipv6", "urls": "url"}
                         single_type = TYPE_MAP.get(ioc_type, ioc_type)
                         sqlite.store_ioc(ioc_val, single_type, chunk_id, conn=conn)
 

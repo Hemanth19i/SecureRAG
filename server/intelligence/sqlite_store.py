@@ -321,7 +321,9 @@ class SQLiteStore:
                 "domains": [],
                 "hashes": [],
                 "cves": [],
-                "emails": []
+                "emails": [],
+                "ipv6": [],
+                "urls": []
             }
             for row in rows:
                 val = row["ioc_value"]
@@ -331,6 +333,8 @@ class SQLiteStore:
                 elif t == "hash": iocs["hashes"].append(val)
                 elif t == "cve": iocs["cves"].append(val)
                 elif t == "email": iocs["emails"].append(val)
+                elif t == "ipv6": iocs["ipv6"].append(val)
+                elif t in ("url", "urls"): iocs["urls"].append(val)
 
             return iocs
         except Exception as e:

@@ -1,12 +1,22 @@
 import re
+import ipaddress
 import logging
 import traceback
 from datetime import datetime
-from intelligence.ioc_extractor import extract_iocs
+from intelligence.ioc_extractor import extract_iocs, _refang
 
 logger = logging.getLogger(__name__)
 
 def is_private_ip(ip: str) -> bool:
+    # IPv6: classify private (ULA fc00::/7), loopback (::1) and link-local
+    # (fe80::/10) via the stdlib ipaddress module.
+    if ":" in ip:
+        try:
+            addr = ipaddress.ip_address(ip)
+            return addr.is_private or addr.is_loopback or addr.is_link_local
+        except ValueError:
+            return False
+    # IPv4: behaviour preserved exactly (RFC1918 + loopback).
     if ip.startswith("10.") or ip.startswith("192.168.") or ip.startswith("127."):
         return True
     if ip.startswith("172."):
@@ -46,15 +56,20 @@ def correlate_iocs(iocs: dict, sqlite_store) -> dict:
         cursor = conn.cursor()
 
         ioc_values = [val for _, val in all_input_iocs]
-        ioc_types = [t for t, _ in all_input_iocs]
-        
-        placeholders = ','.join(['?'] * len(all_input_iocs))
+        ioc_types = list({t for t, _ in all_input_iocs})
+        # URLs were briefly persisted as the legacy type "urls" before being
+        # canonicalised to "url"; include the alias so they still correlate.
+        if "url" in ioc_types:
+            ioc_types.append("urls")
+
+        val_placeholders = ','.join(['?'] * len(ioc_values))
+        type_placeholders = ','.join(['?'] * len(ioc_types))
         query = f"""
             SELECT DISTINCT m.chunk_id
             FROM chunk_ioc_mapping m
             JOIN extracted_iocs e ON m.ioc_value = e.ioc_value
-            WHERE e.ioc_value IN ({placeholders})
-            AND e.ioc_type IN ({placeholders})
+            WHERE e.ioc_value IN ({val_placeholders})
+            AND e.ioc_type IN ({type_placeholders})
         """
         cursor.execute(query, ioc_values + ioc_types)
         chunk_ids = [row[0] for row in cursor.fetchall()]
@@ -83,8 +98,11 @@ def correlate_iocs(iocs: dict, sqlite_store) -> dict:
             lines = doc.split('\n')
             
             for line in lines:
+                # Refang the source line so canonical IOCs match defanged logs
+                # (e.g. "hxxp://evil[.]com" -> "http://evil.com").
+                line = _refang(line)
                 line_lower = line.lower()
-                
+
                 for ioc_type, ioc_value in all_input_iocs:
                     if ioc_value not in line:
                         continue
@@ -105,8 +123,11 @@ def correlate_iocs(iocs: dict, sqlite_store) -> dict:
                         elif ioc_type == "email":
                             display_type = "EMAIL"
                             role = "EMAIL"
-                        elif ioc_type == "ip":
-                            display_type = "IP"
+                        elif ioc_type == "url":
+                            display_type = "URL"
+                            role = "URL"
+                        elif ioc_type in ("ip", "ipv6"):
+                            display_type = "IPV6" if ioc_type == "ipv6" else "IP"
                             if is_private_ip(ioc_value):
                                 role = "INTERNAL_HOST"
 
@@ -121,7 +142,7 @@ def correlate_iocs(iocs: dict, sqlite_store) -> dict:
                         }
                     
                     # Update context and role based on line proximity
-                    if ioc_type == "ip":
+                    if ioc_type in ("ip", "ipv6"):
                         is_priv = is_private_ip(ioc_value)
                         
                         role_precedence = {
@@ -211,6 +232,9 @@ def correlate_iocs(iocs: dict, sqlite_store) -> dict:
             elif role == "EMAIL":
                 category = "EMAIL"
                 risk = "LOW"
+            elif role == "URL":
+                category = "URL"
+                risk = "MEDIUM" if freq > 3 else "LOW"
             else:
                 category = "OBSERVED"
                 risk = "LOW"
