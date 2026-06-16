@@ -22,16 +22,23 @@ def build_attack_graph(sqlite_store, upload_id: str):
         iocs = sqlite_store.get_iocs_for_upload(upload_id)
         techniques = sqlite_store.get_mitre_for_upload(upload_id)
         co_occurring = sqlite_store.get_co_occurring_iocs(upload_id)
-        correlations = sqlite_store.get_global_correlation()
+        correlations = sqlite_store.get_correlations_for_values([ioc["ioc_value"] for ioc in iocs])
 
         nodes = []
         edges = []
         seen_ids = set()
+        seen_edges = set()
 
         def add_node(node):
             if node["id"] not in seen_ids:
                 seen_ids.add(node["id"])
                 nodes.append(node)
+
+        def add_edge(source, target, edge_type):
+            key = (source, target, edge_type)
+            if key not in seen_edges:
+                seen_edges.add(key)
+                edges.append({"source": source, "target": target, "type": edge_type})
 
         upload_node_id = f"upload:{upload['upload_id']}"
         add_node({"id": upload_node_id, "type": "upload", "label": upload["filename"]})
@@ -44,14 +51,10 @@ def build_attack_graph(sqlite_store, upload_id: str):
                 node["role"] = corr.get("role")
                 node["risk_level"] = corr.get("risk_level")
             add_node(node)
-            edges.append({"source": ioc_id, "target": upload_node_id, "type": "observed_in"})
+            add_edge(ioc_id, upload_node_id, "observed_in")
 
         for pair in co_occurring:
-            edges.append({
-                "source": f"ioc:{pair['ioc_a']}",
-                "target": f"ioc:{pair['ioc_b']}",
-                "type": "correlates_with",
-            })
+            add_edge(f"ioc:{pair['ioc_a']}", f"ioc:{pair['ioc_b']}", "correlates_with")
 
         sorted_techniques = sorted(
             techniques,
@@ -67,9 +70,9 @@ def build_attack_graph(sqlite_store, upload_id: str):
                 "tactic": t["tactic"],
                 "confidence": t["confidence"],
             })
-            edges.append({"source": upload_node_id, "target": tech_id, "type": "maps_to"})
+            add_edge(upload_node_id, tech_id, "maps_to")
             if prev_tech_id:
-                edges.append({"source": prev_tech_id, "target": tech_id, "type": "triggers"})
+                add_edge(prev_tech_id, tech_id, "triggers")
             prev_tech_id = tech_id
 
         return {"nodes": nodes, "edges": edges}

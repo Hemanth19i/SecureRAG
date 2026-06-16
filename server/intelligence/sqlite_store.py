@@ -375,6 +375,25 @@ class SQLiteStore:
             logger.error("Error getting global correlations: %s", e)
             return {}
 
+    def get_correlations_for_values(self, ioc_values):
+        import json
+        if not ioc_values:
+            return {}
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            placeholders = ','.join(['?'] * len(ioc_values))
+            cursor.execute(
+                f"SELECT ioc_value, correlation_data FROM global_correlations WHERE ioc_value IN ({placeholders})",
+                ioc_values
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return {row["ioc_value"]: json.loads(row["correlation_data"]) for row in rows}
+        except Exception as e:
+            logger.error("Error getting correlations for values: %s", e)
+            return {}
+
     def get_dashboard_readouts(self):
         try:
             conn = self.get_connection()
