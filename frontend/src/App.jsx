@@ -22,6 +22,7 @@ import {
 /*  Config                                                            */
 /* ================================================================== */
 const API = import.meta.env.VITE_API_BASE_URL || "";
+console.log("API BASE:", API);
 const ENV = (import.meta.env.MODE || "development").toUpperCase();
 const EASE = [0.16, 1, 0.3, 1];
 
