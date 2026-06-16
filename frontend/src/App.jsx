@@ -64,9 +64,8 @@ function useAuth() {
   return { token, login, logout };
 }
 
-async function fetchCorrelations(token) {
-  const data = await apiFetch("/correlate", { token, method: "POST" });
-  return Object.entries(data.correlations || {}).map(([value, d]) => ({
+function mapCorrelations(dict) {
+  return Object.entries(dict || {}).map(([value, d]) => ({
     value,
     category: d.category || "—",
     role: d.role || "—",
@@ -74,6 +73,11 @@ async function fetchCorrelations(token) {
     files: Array.isArray(d.seen_in_files) ? d.seen_in_files.length : 0,
     freq: d.frequency ?? 0,
   }));
+}
+
+async function fetchCorrelations(token) {
+  const data = await apiFetch("/correlate", { token, method: "POST" });
+  return mapCorrelations(data.correlations);
 }
 
 async function fetchMitreMap(token, text) {
@@ -90,6 +94,10 @@ async function fetchTimeline(token, text) {
   const data = await apiFetch("/timeline", { token, method: "POST", body: { text } });
   const events = data.timeline || [];
   return { events, total: data.total_events ?? events.length };
+}
+
+async function fetchQuery(token, query) {
+  return apiFetch("/query", { token, method: "POST", body: { query } });
 }
 
 /* ================================================================== */
@@ -893,6 +901,245 @@ function TimelineView() {
   );
 }
 
+/* ================================================================== */
+/*  Investigation — composite threat analysis from POST /query        */
+/* ================================================================== */
+function InvestigationView() {
+  const { token, login, logout } = useAuth();
+  const [query, setQuery] = useState("");
+  const [state, setState] = useState({ status: "idle", result: null, error: "" });
+
+  const analyze = () => {
+    if (!token || !query.trim()) return;
+    setState({ status: "loading", result: null, error: "" });
+    fetchQuery(token, query).then(
+      (result) => setState({ status: "ready", result, error: "" }),
+      (e) => {
+        if (e.status === 401) { logout(); setState({ status: "idle", result: null, error: "" }); }
+        else setState({ status: "error", result: null, error: e.message || "Request failed" });
+      }
+    );
+  };
+
+  const result = state.result;
+  const analysis = result?.analysis;
+  const analysisFailed = !!analysis?.error;
+  const iocRows = Object.entries(result?.iocs || {}).flatMap(([type, values]) =>
+    type === "error" ? [] : (values || []).map((v) => ({ type, value: v }))
+  );
+  const correlationRows = mapCorrelations(result?.correlation?.details);
+  const insights = result?.correlation?.analyst_insights || [];
+  const techniques = result?.mitre?.techniques || [];
+  const killChain = result?.mitre?.kill_chain || [];
+  const events = result?.timeline?.events || [];
+
+  return (
+    <div className="ws">
+      <section className="masthead">
+        <div className="dotbar">
+          <span className="cap mono">+</span>
+          <span className="dotbar-txt mono">SECURERAG / INVESTIGATION</span>
+          <span className="lead" />
+          <span className="dotbar-txt mono"><span className="g">v3.0</span></span>
+          <span className="cap mono">+</span>
+        </div>
+        <h1 className="mega"><WordWipe text="INVESTIGATION" delay={0.2} /></h1>
+      </section>
+
+      <section className="panel">
+        <span className="stamp mono">[ x:01 ]</span>
+        <div className="panel-head">
+          <SysLabel title="ANALYSIS WORKSTATION" index="07" status={token ? "LIVE" : "LOCKED"} />
+          {token && state.status === "ready" && (
+            <span className="refresh mono">{result?.chunks_used ?? 0} CHUNKS QUERIED</span>
+          )}
+        </div>
+
+        {!token && <LoginGate onLogin={login} />}
+
+        {token && (
+          <div className="ioc-fields" style={{ marginBottom: "var(--space-5)" }}>
+            <input
+              className="ioc-input mono"
+              placeholder="ask a question of the ingested logs…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") analyze(); }}
+              aria-label="Investigation query"
+            />
+            <button type="button" className="ioc-btn mono" onClick={analyze} disabled={state.status === "loading" || !query.trim()}>
+              {state.status === "loading" ? "…" : "ANALYZE"}
+            </button>
+          </div>
+        )}
+
+        {token && state.status === "loading" && (
+          <p className="mono load-msg">// RETRIEVING CONTEXT &amp; RUNNING THREAT ANALYSIS…</p>
+        )}
+
+        {token && state.status === "error" && (
+          <div className="state-err">
+            <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {state.error}</p>
+            <button type="button" className="ioc-btn mono" onClick={analyze}>RETRY</button>
+          </div>
+        )}
+
+        {token && state.status === "ready" && result.chunks_used === 0 && (
+          <p className="mono load-msg">// NO RELEVANT LOG DATA FOUND FOR THIS QUERY.</p>
+        )}
+
+        {token && state.status === "ready" && result.chunks_used > 0 && (
+          <>
+            {analysisFailed ? (
+              <div className="state-err">
+                <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> Analysis engine returned an invalid response: {analysis.error}</p>
+              </div>
+            ) : (
+              <>
+                <p className="mono">{analysis?.answer}</p>
+                <p className="mono" style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap", marginTop: "var(--space-2)" }}>
+                  <Sev level={analysis?.severity} />
+                  <span className="dim">{analysis?.summary}</span>
+                  {analysis?.analysis_method === "rule_based" && (
+                    <span className="refresh mono">AI UNAVAILABLE — RULE-BASED FALLBACK</span>
+                  )}
+                </p>
+
+                {analysis?.threats?.length > 0 && (
+                  <ul className="mono">
+                    {analysis.threats.map((t, i) => <li key={i}>{t}</li>)}
+                  </ul>
+                )}
+
+                {analysis?.recommendations?.length > 0 && (
+                  <ul className="mono">
+                    {analysis.recommendations.map((r, i) => <li key={i}>{r}</li>)}
+                  </ul>
+                )}
+              </>
+            )}
+
+            <p className="mono dim">// INDICATORS EXTRACTED</p>
+            {iocRows.length === 0 ? (
+              <p className="mono load-msg">// NO IOCS EXTRACTED FROM RETRIEVED CONTEXT.</p>
+            ) : (
+              <div className="ev-wrap">
+                <table className="ev">
+                  <thead><tr><th>TYPE</th><th>VALUE</th></tr></thead>
+                  <tbody>
+                    {iocRows.map((r, i) => (
+                      <tr key={`${r.type}-${r.value}-${i}`}>
+                        <td className="mono">{r.type}</td>
+                        <td className="mono artifact" title={r.value}>{r.value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <p className="mono dim">// CORRELATED INDICATORS</p>
+            {insights.length > 0 && (
+              <ul className="mono">
+                {insights.map((ins, i) => <li key={i}>{ins}</li>)}
+              </ul>
+            )}
+            {correlationRows.length === 0 ? (
+              <p className="mono load-msg">// NO CORRELATION DATA AVAILABLE.</p>
+            ) : (
+              <div className="ev-wrap">
+                <table className="ev">
+                  <thead>
+                    <tr><th>INDICATOR</th><th>CATEGORY</th><th>ROLE</th><th>RISK</th><th className="num">FILES</th><th className="num">FREQ</th></tr>
+                  </thead>
+                  <tbody>
+                    {correlationRows.map((r) => (
+                      <tr key={r.value}>
+                        <td className="mono artifact" title={r.value}>{r.value}</td>
+                        <td className="mono">{r.category}</td>
+                        <td className="mono">{r.role}</td>
+                        <td><Sev level={r.risk} /></td>
+                        <td className="mono num">{r.files}</td>
+                        <td className="mono num">{r.freq}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <p className="mono dim">// MITRE ATT&amp;CK</p>
+            {techniques.length === 0 ? (
+              <p className="mono load-msg">// NO TECHNIQUES DETECTED.</p>
+            ) : (
+              <>
+                {killChain.length > 0 && (
+                  <ol className="killchain" aria-label="ATT&CK kill chain order">
+                    {killChain.map((t, i) => (
+                      <li className="kc-step mono" key={`${t.technique}-${i}`}>
+                        <span className="kc-tactic">{t.tactic}</span>
+                        <span className="kc-tech dim">{t.technique}</span>
+                        {i < killChain.length - 1 && <ArrowRight size={12} className="kc-arrow" aria-hidden="true" />}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                <div className="ev-wrap">
+                  <table className="ev">
+                    <thead>
+                      <tr><th>TECHNIQUE</th><th>NAME</th><th>TACTIC</th><th>CONFIDENCE</th><th>EVIDENCE</th></tr>
+                    </thead>
+                    <tbody>
+                      {techniques.map((t, i) => (
+                        <tr key={`${t.technique}-${i}`}>
+                          <td className="mono artifact">{t.technique}</td>
+                          <td className="mono">{t.name}</td>
+                          <td className="mono">{t.tactic}</td>
+                          <td><Sev level={t.confidence} /></td>
+                          <td className="mono logged">{(t.evidence || []).join(", ")}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            <p className="mono dim">// TIMELINE</p>
+            {events.length === 0 ? (
+              <p className="mono load-msg">// NO TIMESTAMPED EVENTS FOUND.</p>
+            ) : (
+              <div className="ev-wrap">
+                <table className="ev">
+                  <thead>
+                    <tr><th>TIMESTAMP</th><th>EVENT TYPE</th><th>SEVERITY</th><th>DESCRIPTION</th><th>MITRE</th></tr>
+                  </thead>
+                  <tbody>
+                    {events.map((e, i) => (
+                      <tr key={`${e.timestamp}-${i}`}>
+                        <td className="mono logged">{e.timestamp}</td>
+                        <td className="mono">{e.event_type}</td>
+                        <td><Sev level={e.severity} /></td>
+                        <td className="mono">{e.description}</td>
+                        <td className="mono artifact">{e.mitre_technique}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </section>
+
+      <footer className="footer mono">
+        <span>© 2026 SecureRAG</span>
+        <span>Developed by Hemanth A R</span>
+      </footer>
+    </div>
+  );
+}
+
 function ModuleView({ id }) {
   const reduce = useReducedMotion();
   const label = NAV_BY_ID[id]?.label;
@@ -954,6 +1201,8 @@ export default function App() {
               <MitreView key="mitre" />
             ) : active === "timeline" ? (
               <TimelineView key="timeline" />
+            ) : active === "investigation" ? (
+              <InvestigationView key="investigation" />
             ) : (
               <ModuleView key={active} id={active} />
             )}
