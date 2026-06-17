@@ -285,7 +285,7 @@ function buildGraphLayout(bNodes, bEdges) {
       return {
         id: n.id,
         position: { x: nodes.length === 1 ? CX : CX - span / 2 + i * H, y },
-        data: { label: labelEl },
+        data: { label: labelEl, meta: n },
         style: agNodeStyle(n),
       };
     });
@@ -1514,6 +1514,7 @@ function AttackGraphView() {
   const [graphError, setGraphError] = useState("");
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [selectedNode, setSelectedNode] = useState(null);
 
   useEffect(() => {
     if (!token) return;
@@ -1533,6 +1534,7 @@ function AttackGraphView() {
     if (!uploadId || !token) return;
     setGraphStatus("loading");
     setGraphError("");
+    setSelectedNode(null);
     fetchAttackGraph(token, uploadId).then(
       (data) => {
         const { nodes: rn, edges: re } = buildGraphLayout(data.nodes || [], data.edges || []);
@@ -1552,8 +1554,10 @@ function AttackGraphView() {
     const id = e.target.value;
     setSelectedId(id);
     if (id) loadGraph(id);
-    else { setGraphStatus("idle"); setNodes([]); setEdges([]); }
+    else { setGraphStatus("idle"); setNodes([]); setEdges([]); setSelectedNode(null); }
   };
+
+  const onNodeClick = useCallback((_, node) => setSelectedNode(node?.data?.meta || null), []);
 
   return (
     <div className="ws">
@@ -1628,6 +1632,7 @@ function AttackGraphView() {
               <span style={{ color: "#7d8590" }}>▪ IOC</span>
               <span style={{ color: "#ff4444" }}>▪ TECHNIQUE (HIGH)</span>
               <span className="dim">── OBSERVED &nbsp;·· CORRELATES &nbsp;<span className="g">→ MAPS / TRIGGERS</span></span>
+              <span className="dim">· CLICK A NODE FOR DETAILS</span>
             </div>
             <div className="ag-canvas">
               <ReactFlow
@@ -1635,6 +1640,8 @@ function AttackGraphView() {
                 edges={edges}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
+                onNodeClick={onNodeClick}
+                onPaneClick={() => setSelectedNode(null)}
                 fitView
                 fitViewOptions={{ padding: 0.25 }}
                 nodesDraggable
@@ -1644,6 +1651,41 @@ function AttackGraphView() {
               >
                 <Background color="rgba(255,255,255,0.04)" variant="dots" gap={24} size={1} />
               </ReactFlow>
+
+              {selectedNode && (
+                <aside className="ag-detail mono">
+                  <div className="ag-detail-head">
+                    <span className="ag-detail-type">
+                      {selectedNode.type === "technique"
+                        ? "TECHNIQUE"
+                        : selectedNode.type === "upload"
+                        ? "UPLOAD"
+                        : `IOC · ${String(selectedNode.type || "").toUpperCase()}`}
+                    </span>
+                    <button type="button" className="ag-detail-close" onClick={() => setSelectedNode(null)} aria-label="Close node details">
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <p className="ag-detail-label">{selectedNode.label}</p>
+                  <dl className="ag-detail-fields">
+                    {selectedNode.type === "technique" && (
+                      <>
+                        <div><dt>TACTIC</dt><dd>{selectedNode.tactic || "—"}</dd></div>
+                        <div><dt>CONFIDENCE</dt><dd>{selectedNode.confidence ? <Sev level={selectedNode.confidence} /> : "—"}</dd></div>
+                      </>
+                    )}
+                    {selectedNode.type !== "technique" && selectedNode.type !== "upload" && (
+                      <>
+                        <div><dt>ROLE</dt><dd>{selectedNode.role || "—"}</dd></div>
+                        <div><dt>RISK</dt><dd>{selectedNode.risk_level ? <Sev level={selectedNode.risk_level} /> : "—"}</dd></div>
+                      </>
+                    )}
+                    {selectedNode.type === "upload" && (
+                      <div><dt>NODE</dt><dd>INGESTED ARTIFACT</dd></div>
+                    )}
+                  </dl>
+                </aside>
+              )}
             </div>
           </>
         )}
@@ -2128,6 +2170,23 @@ body{ margin:0; background:var(--canvas); }
 }
 .ag-canvas .react-flow__edge-path{ opacity:0.7; }
 .ag-canvas .react-flow__attribution{ display:none; }
+.ag-canvas .react-flow__node{ cursor:pointer; }
+
+/* Node details panel (click a node) */
+.ag-detail{ position:absolute; top:var(--space-4); right:var(--space-4); width:248px; z-index:5;
+  background:rgba(13,17,23,0.96); border:1px solid var(--hairline); padding:var(--space-4);
+  display:flex; flex-direction:column; gap:var(--space-3);
+  backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
+.ag-detail-head{ display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); }
+.ag-detail-type{ font-size:0.5625rem; letter-spacing:0.1em; color:var(--green); }
+.ag-detail-close{ display:grid; place-items:center; width:22px; height:22px; cursor:pointer;
+  background:none; border:1px solid var(--hairline); color:var(--muted); transition:color .15s ease, border-color .15s ease; }
+.ag-detail-close:hover{ color:var(--text); border-color:rgba(0,255,136,0.4); }
+.ag-detail-label{ font-size:0.75rem; color:var(--text); word-break:break-all; line-height:1.4; margin:0; }
+.ag-detail-fields{ display:flex; flex-direction:column; gap:var(--space-2); margin:0; }
+.ag-detail-fields > div{ display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); }
+.ag-detail-fields dt{ font-size:0.5625rem; letter-spacing:0.08em; color:var(--dim); }
+.ag-detail-fields dd{ margin:0; font-size:0.6875rem; color:var(--muted); text-align:right; }
 .refresh{ font-size:0.6875rem; color:var(--muted); letter-spacing:0.06em; }
 `;
 
