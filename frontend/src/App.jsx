@@ -31,16 +31,82 @@ const EASE = [0.16, 1, 0.3, 1];
 /*  Auth & API plumbing                                               */
 /* ================================================================== */
 const TOKEN_KEY = "srag_token";
+const REFRESH_KEY = "srag_refresh";
+// Broadcast channel so every mounted useAuth() instance can sync its in-memory
+// token after a silent refresh (or a forced logout) performed inside apiFetch.
+// A falsy detail signals a session teardown (logout / refresh failure).
+const TOKEN_EVENT = "srag:token";
+const INVESTIGATION_KEY = "srag_investigation";
+
+function readRefreshToken() {
+  try { return localStorage.getItem(REFRESH_KEY) || ""; } catch { return ""; }
+}
+
+function setAccessToken(t) {
+  try { localStorage.setItem(TOKEN_KEY, t); } catch { /* ignore */ }
+  window.dispatchEvent(new CustomEvent(TOKEN_EVENT, { detail: t }));
+}
+
+function clearTokens() {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(REFRESH_KEY);
+  } catch { /* ignore */ }
+  window.dispatchEvent(new CustomEvent(TOKEN_EVENT, { detail: "" }));
+}
+
+// Single-flight refresh: concurrent 401s share one /auth/refresh call rather
+// than stampeding it. Resolves to a new access token, or null on any failure.
+let refreshPromise = null;
+function refreshAccessToken() {
+  if (refreshPromise) return refreshPromise;
+  const refresh = readRefreshToken();
+  if (!refresh) return Promise.resolve(null);
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${API}/auth/refresh`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${refresh}` },
+      });
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => null);
+      return data?.access_token || null;
+    } catch {
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
+}
 
 async function apiFetch(path, { token = "", method = "GET", body } = {}) {
-  const res = await fetch(`${API}${path}`, {
-    method,
-    headers: {
-      ...(body ? { "Content-Type": "application/json" } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  // Never attempt a refresh-retry for /auth/* (a 401 there is bad credentials,
+  // not an expired session) — this is also the infinite-loop guard.
+  const isAuthPath = path.startsWith("/auth/");
+  const doFetch = (bearer) =>
+    fetch(`${API}${path}`, {
+      method,
+      headers: {
+        ...(body ? { "Content-Type": "application/json" } : {}),
+        ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  let res = await doFetch(token);
+
+  // On 401: try one silent refresh, then retry the original request once.
+  if (res.status === 401 && !isAuthPath) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      setAccessToken(newToken);
+      res = await doFetch(newToken);
+    } else {
+      clearTokens();
+    }
+  }
+
   if (!res.ok) {
     const err = new Error(res.status === 401 ? "Unauthorized" : `Request failed (${res.status})`);
     err.status = res.status;
@@ -53,15 +119,30 @@ function useAuth() {
   const [token, setToken] = useState(() => {
     try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
   });
+  // Stay in sync when apiFetch silently refreshes or clears the token.
+  useEffect(() => {
+    const onToken = (e) => setToken(e.detail || "");
+    window.addEventListener(TOKEN_EVENT, onToken);
+    return () => window.removeEventListener(TOKEN_EVENT, onToken);
+  }, []);
   const login = useCallback(async (username, password) => {
     const data = await apiFetch("/auth/login", { method: "POST", body: { username, password } });
     setToken(data.access_token);
-    try { localStorage.setItem(TOKEN_KEY, data.access_token); } catch { /* ignore */ }
+    try {
+      localStorage.setItem(TOKEN_KEY, data.access_token);
+      if (data.refresh_token) localStorage.setItem(REFRESH_KEY, data.refresh_token);
+    } catch { /* ignore */ }
     return data;
   }, []);
   const logout = useCallback(() => {
     setToken("");
-    try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ }
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(REFRESH_KEY);
+    } catch { /* ignore */ }
+    // Broadcast teardown so other useAuth() instances and the App-level
+    // investigation cache clear too.
+    window.dispatchEvent(new CustomEvent(TOKEN_EVENT, { detail: "" }));
   }, []);
   return { token, login, logout };
 }
@@ -120,13 +201,24 @@ async function fetchAttackGraph(token, uploadId) {
 // (browser sets the multipart boundary; we must NOT set Content-Type) and some
 // failure modes (e.g. 413 from Flask's MAX_CONTENT_LENGTH) return non-JSON HTML.
 async function uploadLog(token, file) {
-  const form = new FormData();
-  form.append("file", file);
-  const res = await fetch(`${API}/upload`, {
-    method: "POST",
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: form,
-  });
+  // FormData is rebuilt per attempt — a consumed request body can't be reused
+  // on the post-refresh retry.
+  const doUpload = (bearer) => {
+    const form = new FormData();
+    form.append("file", file);
+    return fetch(`${API}/upload`, {
+      method: "POST",
+      headers: { ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
+      body: form,
+    });
+  };
+
+  let res = await doUpload(token);
+  if (res.status === 401) {
+    const newToken = await refreshAccessToken();
+    if (newToken) { setAccessToken(newToken); res = await doUpload(newToken); }
+    else { clearTokens(); }
+  }
   let data = null;
   try { data = await res.json(); } catch { /* non-JSON body (e.g. 413 HTML) */ }
   if (!res.ok) {
@@ -1716,8 +1808,30 @@ function ModuleView({ id }) {
 export default function App() {
   const [active, setActive] = useState("dashboard");
   const [open, setOpen] = useState(false);
-  const [lastInvestigation, setLastInvestigation] = useState(null);
+  // Hydrate the last investigation from storage so Reports survives a reload.
+  const [lastInvestigation, setLastInvestigation] = useState(() => {
+    try {
+      const raw = localStorage.getItem(INVESTIGATION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
   const select = (id) => { setActive(id); setOpen(false); };
+
+  // Mirror the investigation to storage on every change (and clear it when reset).
+  useEffect(() => {
+    try {
+      if (lastInvestigation) localStorage.setItem(INVESTIGATION_KEY, JSON.stringify(lastInvestigation));
+      else localStorage.removeItem(INVESTIGATION_KEY);
+    } catch { /* ignore */ }
+  }, [lastInvestigation]);
+
+  // Drop the cached investigation whenever the session is torn down (logout /
+  // refresh failure both dispatch TOKEN_EVENT with an empty detail).
+  useEffect(() => {
+    const onToken = (e) => { if (!e.detail) setLastInvestigation(null); };
+    window.addEventListener(TOKEN_EVENT, onToken);
+    return () => window.removeEventListener(TOKEN_EVENT, onToken);
+  }, []);
 
   return (
     <div className="srag">
