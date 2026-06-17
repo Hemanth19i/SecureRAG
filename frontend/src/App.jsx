@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { ReactFlow, Background, useNodesState, useEdgesState } from "@xyflow/react";
 import { motion, AnimatePresence, animate, useInView, useReducedMotion } from "framer-motion";
 import {
   LayoutDashboard,
@@ -111,6 +112,76 @@ async function fetchReport(token, analysis) {
   return data.report;
 }
 
+async function fetchAttackGraph(token, uploadId) {
+  return apiFetch(`/attack-graph?upload_id=${encodeURIComponent(uploadId)}`, { token });
+}
+
+/* ================================================================== */
+/*  Attack Graph layout helpers                                        */
+/* ================================================================== */
+function agNodeStyle(n) {
+  const base = {
+    background: "#0d1117", border: "1px solid rgba(255,255,255,0.08)",
+    color: "#7d8590", fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+    fontSize: "0.625rem", padding: "8px 12px", borderRadius: 0,
+    width: 164, lineHeight: 1.5, letterSpacing: "0.03em",
+  };
+  if (n.type === "upload") return { ...base, border: "1px solid #00ff88", color: "#00ff88", fontSize: "0.6875rem" };
+  if (n.type === "technique") {
+    const c = severityColor((n.confidence || "low").toLowerCase());
+    return { ...base, border: `1px solid ${c}55`, color: c };
+  }
+  if (n.risk_level === "HIGH") return { ...base, border: "1px solid rgba(255,68,68,0.4)", color: "#ff8c42" };
+  if (n.risk_level === "MEDIUM") return { ...base, border: "1px solid rgba(255,215,0,0.3)", color: "#e6edf3" };
+  return base;
+}
+
+function agEdgeStyle(type) {
+  if (type === "maps_to") return { stroke: "#00ff88", strokeWidth: 1.5 };
+  if (type === "triggers") return { stroke: "#00ff88", strokeWidth: 2, strokeDasharray: "5 3" };
+  if (type === "correlates_with") return { stroke: "#ff8c42", strokeWidth: 1, strokeDasharray: "3 3" };
+  return { stroke: "rgba(255,255,255,0.15)", strokeWidth: 1 };
+}
+
+function buildGraphLayout(bNodes, bEdges) {
+  const H = 210;
+  const V = 200;
+  const CX = 500;
+  const uploads = bNodes.filter((n) => n.type === "upload");
+  const iocs    = bNodes.filter((n) => n.type !== "upload" && n.type !== "technique");
+  const techs   = bNodes.filter((n) => n.type === "technique");
+
+  function place(nodes, y) {
+    const span = (nodes.length - 1) * H;
+    return nodes.map((n, i) => {
+      const trunc = (s, max = 18) => s.length > max ? s.slice(0, max - 1) + "…" : s;
+      const labelEl =
+        n.type === "upload"
+          ? <><div style={{ opacity: 0.5, fontSize: "0.5rem", letterSpacing: "0.1em" }}>UPLOAD</div><div>{trunc(n.label, 22)}</div></>
+          : n.type === "technique"
+          ? <><div style={{ fontWeight: 700 }}>{n.label}</div><div style={{ opacity: 0.65, fontSize: "0.5625rem" }}>{n.tactic || ""}</div></>
+          : <><div style={{ opacity: 0.5, fontSize: "0.5rem", letterSpacing: "0.06em" }}>[{n.type}]</div><div>{trunc(n.label)}</div></>;
+      return {
+        id: n.id,
+        position: { x: nodes.length === 1 ? CX : CX - span / 2 + i * H, y },
+        data: { label: labelEl },
+        style: agNodeStyle(n),
+      };
+    });
+  }
+
+  const rfNodes = [...place(uploads, 0), ...place(iocs, V), ...place(techs, V * 2)];
+  const rfEdges = bEdges.map((e, i) => ({
+    id: `e${i}`,
+    source: e.source,
+    target: e.target,
+    type: "smoothstep",
+    animated: e.type === "triggers" || e.type === "maps_to",
+    style: agEdgeStyle(e.type),
+  }));
+  return { nodes: rfNodes, edges: rfEdges };
+}
+
 /* ================================================================== */
 /*  Severity — single source of truth (colours used ONLY on severity) */
 /* ================================================================== */
@@ -130,6 +201,7 @@ const NAV = [
   { id: "mitre", label: "MITRE ATT&CK", icon: Grid3x3 },
   { id: "timeline", label: "TIMELINE", icon: Clock },
   { id: "reports", label: "REPORTS", icon: FileText },
+  { id: "attack-graph", label: "ATTACK GRAPH", icon: Network },
 ];
 const NAV_BY_ID = Object.fromEntries(NAV.map((n) => [n.id, n]));
 
@@ -1309,6 +1381,161 @@ function ReportsView({ lastInvestigation }) {
   );
 }
 
+/* ================================================================== */
+/*  Attack Graph — kill-chain visualizer from GET /attack-graph       */
+/* ================================================================== */
+function AttackGraphView() {
+  const { token, login, logout } = useAuth();
+  const [uploads, setUploads] = useState([]);
+  const [uploadsLoaded, setUploadsLoaded] = useState(false);
+  const [selectedId, setSelectedId] = useState("");
+  const [graphStatus, setGraphStatus] = useState("idle");
+  const [graphError, setGraphError] = useState("");
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    fetchStats(token).then(
+      (data) => { if (active) { setUploads(data.evidence || []); setUploadsLoaded(true); } },
+      (e) => {
+        if (!active) return;
+        if (e.status === 401) logout();
+        setUploadsLoaded(true);
+      }
+    );
+    return () => { active = false; };
+  }, [token, logout]);
+
+  const loadGraph = useCallback((uploadId) => {
+    if (!uploadId || !token) return;
+    setGraphStatus("loading");
+    setGraphError("");
+    fetchAttackGraph(token, uploadId).then(
+      (data) => {
+        const { nodes: rn, edges: re } = buildGraphLayout(data.nodes || [], data.edges || []);
+        setNodes(rn);
+        setEdges(re);
+        setGraphStatus(rn.length === 0 ? "empty" : "ready");
+      },
+      (e) => {
+        if (e.status === 401) { logout(); setGraphStatus("idle"); return; }
+        setGraphError(e.message || "Request failed");
+        setGraphStatus("error");
+      }
+    );
+  }, [token, logout, setNodes, setEdges]);
+
+  const handleSelect = (e) => {
+    const id = e.target.value;
+    setSelectedId(id);
+    if (id) loadGraph(id);
+    else { setGraphStatus("idle"); setNodes([]); setEdges([]); }
+  };
+
+  return (
+    <div className="ws">
+      <section className="masthead">
+        <div className="dotbar">
+          <span className="cap mono">+</span>
+          <span className="dotbar-txt mono">SECURERAG / ATTACK GRAPH</span>
+          <span className="lead" />
+          <span className="dotbar-txt mono"><span className="g">v3.0</span></span>
+          <span className="cap mono">+</span>
+        </div>
+        <h1 className="mega"><WordWipe text="ATTACK GRAPH" delay={0.2} /></h1>
+      </section>
+
+      <section className="panel">
+        <span className="stamp mono">[ x:01 ]</span>
+        <div className="panel-head">
+          <SysLabel title="KILL-CHAIN VISUALIZER" index="09" status={token ? "LIVE" : "LOCKED"} />
+          {token && graphStatus === "ready" && (
+            <span className="refresh mono">{nodes.length} NODES · {edges.length} EDGES</span>
+          )}
+        </div>
+
+        {!token && <LoginGate onLogin={login} />}
+
+        {token && !uploadsLoaded && (
+          <p className="mono load-msg">// LOADING INGESTED UPLOADS…</p>
+        )}
+
+        {token && uploadsLoaded && uploads.length === 0 && (
+          <p className="mono load-msg">// NO UPLOADS FOUND — INGEST LOGS TO POPULATE.</p>
+        )}
+
+        {token && uploadsLoaded && uploads.length > 0 && (
+          <div className="ag-controls">
+            <select
+              className="ioc-input mono ag-select"
+              value={selectedId}
+              onChange={handleSelect}
+              aria-label="Select upload to visualize attack graph"
+            >
+              <option value="">— SELECT UPLOAD —</option>
+              {uploads.map((u) => (
+                <option key={u.upload_id} value={u.upload_id}>
+                  [{u.upload_id.slice(0, 8)}] {u.filename}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {token && graphStatus === "loading" && (
+          <p className="mono load-msg">// BUILDING ATTACK GRAPH…</p>
+        )}
+
+        {token && graphStatus === "error" && (
+          <div className="state-err">
+            <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {graphError}</p>
+            <button type="button" className="ioc-btn mono" onClick={() => loadGraph(selectedId)} disabled={!selectedId}>RETRY</button>
+          </div>
+        )}
+
+        {token && graphStatus === "empty" && (
+          <p className="mono load-msg">// NO GRAPH DATA — NO IOCS OR TECHNIQUES FOUND FOR THIS UPLOAD.</p>
+        )}
+
+        {token && graphStatus === "ready" && (
+          <>
+            <div className="ag-legend mono">
+              <span><span className="g">▪</span> UPLOAD</span>
+              <span style={{ color: "#ff8c42" }}>▪ HIGH-RISK IOC</span>
+              <span style={{ color: "#7d8590" }}>▪ IOC</span>
+              <span style={{ color: "#ff4444" }}>▪ TECHNIQUE (HIGH)</span>
+              <span className="dim">── OBSERVED &nbsp;·· CORRELATES &nbsp;<span className="g">→ MAPS / TRIGGERS</span></span>
+            </div>
+            <div className="ag-canvas">
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                fitView
+                fitViewOptions={{ padding: 0.25 }}
+                nodesDraggable
+                nodesConnectable={false}
+                elementsSelectable
+                proOptions={{ hideAttribution: true }}
+              >
+                <Background color="rgba(255,255,255,0.04)" variant="dots" gap={24} size={1} />
+              </ReactFlow>
+            </div>
+          </>
+        )}
+      </section>
+
+      <footer className="footer mono">
+        <span>© 2026 SecureRAG</span>
+        <span>Developed by Hemanth A R</span>
+      </footer>
+    </div>
+  );
+}
+
 function ModuleView({ id }) {
   const reduce = useReducedMotion();
   const label = NAV_BY_ID[id]?.label;
@@ -1375,6 +1602,8 @@ export default function App() {
               <InvestigationView key="investigation" onResult={setLastInvestigation} />
             ) : active === "reports" ? (
               <ReportsView key="reports" lastInvestigation={lastInvestigation} />
+            ) : active === "attack-graph" ? (
+              <AttackGraphView key="attack-graph" />
             ) : (
               <ModuleView key={active} id={active} />
             )}
@@ -1611,4 +1840,28 @@ body{ margin:0; background:var(--canvas); }
     animation-duration:.001ms!important; animation-iteration-count:1!important; transition-duration:.001ms!important; }
   .led{ animation:none; }
 }
+
+/* ---- Attack Graph ---- */
+.ag-controls{ display:flex; align-items:center; gap:var(--space-3); margin-bottom:var(--space-5); flex-wrap:wrap; }
+.ag-select{ flex:1 1 320px; max-width:520px; }
+.ag-legend{ display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-3) var(--space-5);
+  font-size:0.6875rem; letter-spacing:0.03em; color:var(--muted);
+  margin-bottom:var(--space-4); line-height:1.6; }
+.ag-legend .g{ color:var(--green); }
+.ag-legend .dim{ color:var(--dim); }
+.ag-canvas{ width:100%; height:560px; background:var(--canvas); border:1px solid var(--hairline);
+  position:relative; overflow:hidden; }
+.ag-canvas .react-flow__background{ background:transparent!important; }
+.ag-canvas .react-flow__node-default{
+  border-radius:0!important;
+  font-family:var(--mono)!important;
+  font-size:0.625rem!important;
+  padding:0!important;
+  width:auto!important;
+  box-shadow:none!important;
+}
+.ag-canvas .react-flow__edge-path{ opacity:0.7; }
+.ag-canvas .react-flow__attribution{ display:none; }
+.refresh{ font-size:0.6875rem; color:var(--muted); letter-spacing:0.06em; }
 `;
+
