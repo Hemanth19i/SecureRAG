@@ -173,6 +173,26 @@ class SQLiteStore:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_case ON case_notes(case_id)")
 
+            # 11. IOC Enrichment cache (Threat Intelligence). enrichment_data
+            # holds the provider JSON; expires_at drives TTL + negative caching.
+            # Independent of global_correlations (which is wiped per upload).
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ioc_enrichment (
+                ioc_value TEXT PRIMARY KEY,
+                ioc_type TEXT,
+                source TEXT,
+                reputation_score INTEGER,
+                abuse_confidence INTEGER,
+                verdict TEXT,
+                enrichment_data TEXT,
+                status TEXT,
+                fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                expires_at DATETIME
+            )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_enrich_verdict ON ioc_enrichment(verdict)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_enrich_expires ON ioc_enrichment(expires_at)")
+
             conn.commit()
             conn.close()
             logger.info("Initialized SQLite SIEM Store at %s", self.db_path)
@@ -754,3 +774,67 @@ class SQLiteStore:
         except Exception as e:
             logger.error("Error getting case notes: %s", e)
             return []
+
+    # --- Threat Intelligence enrichment cache -----------------------------
+
+    def store_ioc_enrichment(self, record, ttl_seconds, conn=None):
+        """Upsert an enrichment record. expires_at = now + ttl_seconds (computed
+        in SQLite so time authority matches CURRENT_TIMESTAMP). enrichment_data
+        is JSON-encoded. Honours the conn= convention."""
+        import json
+        managed = conn is None
+        own_conn = None
+        try:
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            conn.execute("""
+            INSERT OR REPLACE INTO ioc_enrichment
+            (ioc_value, ioc_type, source, reputation_score, abuse_confidence,
+             verdict, enrichment_data, status, fetched_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, datetime('now', ?))
+            """, (
+                record.get("ioc_value"),
+                record.get("ioc_type"),
+                record.get("source"),
+                record.get("reputation_score"),
+                record.get("abuse_confidence"),
+                record.get("verdict"),
+                json.dumps(record.get("enrichment_data") or {}),
+                record.get("status"),
+                "%+d seconds" % int(ttl_seconds),
+            ))
+            if managed:
+                conn.commit()
+        except Exception as e:
+            logger.error("Error storing IOC enrichment: %s", e)
+            if not managed:
+                raise
+        finally:
+            if own_conn is not None:
+                own_conn.close()
+
+    def get_ioc_enrichment(self, ioc_value):
+        """Return a cached enrichment with enrichment_data parsed and a computed
+        'expired' boolean (expires_at <= now), or None if absent."""
+        import json
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT *, (expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP) AS expired "
+                "FROM ioc_enrichment WHERE ioc_value = ?",
+                (ioc_value,),
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if not row:
+                return None
+            rec = dict(row)
+            raw = rec.pop("enrichment_data", None)
+            rec["enrichment_data"] = json.loads(raw) if raw else {}
+            rec["expired"] = bool(rec.get("expired"))
+            return rec
+        except Exception as e:
+            logger.error("Error getting IOC enrichment: %s", e)
+            return None

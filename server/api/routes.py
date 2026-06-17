@@ -13,6 +13,7 @@ from intelligence.mitre_mapper import map_to_mitre, build_kill_chain
 from intelligence.timeline_gen import generate_timeline, format_timeline_string
 from intelligence.correlator import correlate_iocs, get_correlation_summary, generate_analyst_insights
 from intelligence.attack_graph import build_attack_graph
+from intelligence.threat_intel import get_enrichment
 
 logger = logging.getLogger(__name__)
 
@@ -507,6 +508,25 @@ def list_case_notes_endpoint(case_id):
     try:
         notes = current_app.sqlite_store.get_case_notes(case_id)
         return jsonify({"notes": notes, "total": len(notes)}), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/enrich', methods=['GET'])
+@jwt_required()
+def enrich_endpoint():
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        value = request.args.get('value')
+        if not value:
+            return jsonify({"error": "value query parameter is required"}), 400
+
+        # Cache-first; threat_intel handles TTL, negative caching, missing key,
+        # provider failures, and unsupported IOC types without raising.
+        result = get_enrichment(current_app.sqlite_store, value)
+        return jsonify(result), 200
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
