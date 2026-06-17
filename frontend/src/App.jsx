@@ -1906,6 +1906,8 @@ function CaseDetailView({ caseId, onBack }) {
   const [notesStatus, setNotesStatus] = useState("idle");
   const [draft, setDraft] = useState("");
   const [noteSave, setNoteSave] = useState({ status: "idle", error: "" });
+  const [enrMap, setEnrMap] = useState({});
+  const enrRef = useRef({});
 
   const syncForm = (data) => setForm({
     status: data.status, severity: data.severity,
@@ -2001,6 +2003,50 @@ function CaseDetailView({ caseId, onBack }) {
   const techniques = snap?.mitre?.techniques || [];
   const timelineSummary = snap?.timeline?.summary;
   const events = snap?.timeline?.events || [];
+  const publicIps = Array.from(new Set((snap?.iocs?.ips || []).filter(isPublicIp)));
+
+  // Enrich the case's public IPs once the snapshot is loaded. Cache per IP via
+  // enrRef so re-renders/saves never refetch; setState only in async callbacks.
+  useEffect(() => {
+    if (!token || !snap) return;
+    const ips = Array.from(new Set((snap.iocs?.ips || []).filter(isPublicIp)));
+    if (ips.length === 0) return;
+    let active = true;
+    (async () => {
+      for (const ip of ips) {
+        if (enrRef.current[ip]) continue;
+        try {
+          const data = await fetchEnrichment(token, ip);
+          if (!active) return;
+          enrRef.current[ip] = data;
+          setEnrMap((m) => ({ ...m, [ip]: data }));
+        } catch (e) {
+          if (!active) return;
+          if (e.status === 401) { logout(); return; }
+          const rec = { status: e.status ? "error" : "network" };
+          enrRef.current[ip] = rec;
+          setEnrMap((m) => ({ ...m, [ip]: rec }));
+        }
+      }
+    })();
+    return () => { active = false; };
+  }, [token, snap, logout]);
+
+  const enrRep = (ip) => {
+    const e = enrMap[ip];
+    if (!e) return <span className="mono dim">…</span>;
+    if (e.status === "ok") return <Sev level={e.verdict} />;
+    if (e.status === "unavailable") return <span className="mono dim">UNAVAILABLE</span>;
+    if (e.status === "unsupported") return <span className="dim">—</span>;
+    return <span className="mono enr-err">ERR</span>;
+  };
+
+  const enrAbuse = (ip) => {
+    const e = enrMap[ip];
+    if (!e) return "…";
+    if (e.status === "ok") return e.abuse_confidence ?? 0;
+    return "—";
+  };
 
   return (
     <div className="ws">
@@ -2145,6 +2191,32 @@ function CaseDetailView({ caseId, onBack }) {
                   <p className="mono load-msg">// NO TIMELINE IN SNAPSHOT.</p>
                 ) : (
                   <p className="mono load-msg">// {events.length} EVENTS IN SNAPSHOT.</p>
+                )}
+              </>
+            )}
+
+            {snap && (
+              <>
+                <p className="mono dim">// THREAT INTELLIGENCE</p>
+                {publicIps.length === 0 ? (
+                  <p className="mono load-msg">// NO PUBLIC IPS IN THIS CASE.</p>
+                ) : (
+                  <div className="ev-wrap">
+                    <table className="ev">
+                      <thead>
+                        <tr><th>INDICATOR</th><th>REPUTATION</th><th className="num">ABUSE</th></tr>
+                      </thead>
+                      <tbody>
+                        {publicIps.map((ip) => (
+                          <tr key={ip}>
+                            <td className="mono artifact" title={ip}>{ip}</td>
+                            <td>{enrRep(ip)}</td>
+                            <td className="mono num">{enrAbuse(ip)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </>
             )}
