@@ -17,6 +17,7 @@ import {
   ArrowRight,
   AlertTriangle,
   Lock,
+  Briefcase,
 } from "lucide-react";
 
 /* ================================================================== */
@@ -200,6 +201,15 @@ async function createCase(token, query, snapshot) {
   return data.case;
 }
 
+async function fetchCases(token) {
+  const data = await apiFetch("/cases", { token, method: "GET" });
+  return data.cases || [];
+}
+
+async function fetchCase(token, caseId) {
+  return apiFetch(`/cases/${encodeURIComponent(caseId)}`, { token, method: "GET" });
+}
+
 async function fetchAttackGraph(token, uploadId) {
   return apiFetch(`/attack-graph?upload_id=${encodeURIComponent(uploadId)}`, { token });
 }
@@ -330,6 +340,7 @@ const NAV = [
   { id: "timeline", label: "TIMELINE", icon: Clock },
   { id: "reports", label: "REPORTS", icon: FileText },
   { id: "attack-graph", label: "ATTACK GRAPH", icon: Network },
+  { id: "cases", label: "CASES", icon: Briefcase },
 ];
 const NAV_BY_ID = Object.fromEntries(NAV.map((n) => [n.id, n]));
 
@@ -1742,6 +1753,283 @@ function AttackGraphView() {
 }
 
 /* ================================================================== */
+/*  Case Detail — stored investigation snapshot from GET /cases/<id>   */
+/* ================================================================== */
+function CaseDetailView({ caseId, onBack }) {
+  const { token, login, logout } = useAuth();
+  const [state, setState] = useState({ status: "idle", data: null, error: "" });
+
+  useEffect(() => {
+    if (!token || !caseId) return;
+    let active = true;
+    fetchCase(token, caseId).then(
+      (data) => { if (active) setState({ status: "ready", data, error: "" }); },
+      (e) => {
+        if (!active) return;
+        if (e.status === 401) { logout(); setState({ status: "idle", data: null, error: "" }); return; }
+        setState({ status: "error", data: null, error: e.status === 404 ? "Case not found" : (e.message || "Request failed") });
+      }
+    );
+    return () => { active = false; };
+  }, [token, caseId, logout]);
+
+  const retry = () => {
+    if (!token || !caseId) return;
+    setState({ status: "loading", data: null, error: "" });
+    fetchCase(token, caseId).then(
+      (data) => setState({ status: "ready", data, error: "" }),
+      (e) => {
+        if (e.status === 401) { logout(); setState({ status: "idle", data: null, error: "" }); return; }
+        setState({ status: "error", data: null, error: e.status === 404 ? "Case not found" : (e.message || "Request failed") });
+      }
+    );
+  };
+
+  const loading = token && (state.status === "idle" || state.status === "loading");
+  const c = state.data;
+  const snap = c?.snapshot;
+  const analysis = snap?.analysis;
+  const analysisFailed = !!analysis?.error;
+  const techniques = snap?.mitre?.techniques || [];
+  const timelineSummary = snap?.timeline?.summary;
+  const events = snap?.timeline?.events || [];
+
+  return (
+    <div className="ws">
+      <section className="masthead">
+        <div className="dotbar">
+          <span className="cap mono">+</span>
+          <span className="dotbar-txt mono">SECURERAG / CASE FILE</span>
+          <span className="lead" />
+          <span className="dotbar-txt mono"><span className="g">v0.5</span></span>
+          <span className="cap mono">+</span>
+        </div>
+        <h1 className="mega"><WordWipe text="CASE FILE" delay={0.2} /></h1>
+      </section>
+
+      <section className="panel">
+        <span className="stamp mono">[ x:01 ]</span>
+        <div className="panel-head">
+          <SysLabel title="CASE FILE" index="10" status={token ? "LIVE" : "LOCKED"} />
+          <button type="button" className="ioc-btn mono" onClick={onBack}>← CASES</button>
+        </div>
+
+        {!token && <LoginGate onLogin={login} />}
+
+        {loading && (
+          <p className="mono load-msg">// RETRIEVING CASE FILE…</p>
+        )}
+
+        {token && state.status === "error" && (
+          <div className="state-err">
+            <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {state.error}</p>
+            <button type="button" className="ioc-btn mono" onClick={retry}>RETRY</button>
+          </div>
+        )}
+
+        {token && state.status === "ready" && c && (
+          <>
+            <p className="mono case-title">{c.title}</p>
+            <p className="mono" style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap", marginBottom: "var(--space-5)" }}>
+              <Sev level={c.severity} />
+              <span className="refresh mono">{c.status}</span>
+              <span className="dim">{c.case_id}</span>
+              <span className="dim">· {c.created_by}</span>
+              <span className="dim">· {c.created_at}</span>
+            </p>
+
+            {c.query && <p className="mono dim">// SOURCE QUERY: {c.query}</p>}
+
+            {!snap ? (
+              <p className="mono load-msg">// NO SNAPSHOT STORED FOR THIS CASE.</p>
+            ) : analysisFailed ? (
+              <div className="state-err">
+                <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> Stored analysis is invalid: {analysis.error}</p>
+              </div>
+            ) : (
+              <>
+                <p className="mono dim">// ANALYSIS</p>
+                {analysis?.answer && <p className="mono">{analysis.answer}</p>}
+                {analysis?.summary && (
+                  <p className="mono" style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap", marginTop: "var(--space-2)" }}>
+                    <Sev level={analysis?.severity} />
+                    <span className="dim">{analysis.summary}</span>
+                  </p>
+                )}
+
+                {analysis?.threats?.length > 0 && (
+                  <>
+                    <p className="mono dim">// THREATS</p>
+                    <ul className="mono">{analysis.threats.map((t, i) => <li key={i}>{t}</li>)}</ul>
+                  </>
+                )}
+
+                {analysis?.recommendations?.length > 0 && (
+                  <>
+                    <p className="mono dim">// RECOMMENDATIONS</p>
+                    <ul className="mono">{analysis.recommendations.map((r, i) => <li key={i}>{r}</li>)}</ul>
+                  </>
+                )}
+
+                <p className="mono dim">// MITRE ATT&amp;CK</p>
+                {techniques.length === 0 ? (
+                  <p className="mono load-msg">// NO TECHNIQUES IN SNAPSHOT.</p>
+                ) : (
+                  <div className="ev-wrap">
+                    <table className="ev">
+                      <thead>
+                        <tr><th>TECHNIQUE</th><th>NAME</th><th>TACTIC</th><th>CONFIDENCE</th></tr>
+                      </thead>
+                      <tbody>
+                        {techniques.map((t, i) => (
+                          <tr key={`${t.technique}-${i}`}>
+                            <td className="mono artifact">{t.technique}</td>
+                            <td className="mono">{t.name}</td>
+                            <td className="mono">{t.tactic}</td>
+                            <td><Sev level={t.confidence} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <p className="mono dim">// TIMELINE</p>
+                {timelineSummary ? (
+                  <pre className="mono report-pre">{timelineSummary}</pre>
+                ) : events.length === 0 ? (
+                  <p className="mono load-msg">// NO TIMELINE IN SNAPSHOT.</p>
+                ) : (
+                  <p className="mono load-msg">// {events.length} EVENTS IN SNAPSHOT.</p>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </section>
+
+      <footer className="footer mono">
+        <span>© 2026 SecureRAG</span>
+        <span>Developed by Hemanth A R</span>
+      </footer>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  Cases — case register from GET /cases (opens CaseDetailView)       */
+/* ================================================================== */
+function CasesView() {
+  const { token, login, logout } = useAuth();
+  const [state, setState] = useState({ status: "idle", rows: [], error: "" });
+  const [openId, setOpenId] = useState(null);
+
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    fetchCases(token).then(
+      (rows) => { if (active) setState({ status: "ready", rows, error: "" }); },
+      (e) => {
+        if (!active) return;
+        if (e.status === 401) { logout(); setState({ status: "idle", rows: [], error: "" }); return; }
+        setState({ status: "error", rows: [], error: e.message || "Request failed" });
+      }
+    );
+    return () => { active = false; };
+  }, [token, logout]);
+
+  const reload = () => {
+    if (!token) return;
+    setState({ status: "loading", rows: [], error: "" });
+    fetchCases(token).then(
+      (rows) => setState({ status: "ready", rows, error: "" }),
+      (e) => {
+        if (e.status === 401) { logout(); setState({ status: "idle", rows: [], error: "" }); return; }
+        setState({ status: "error", rows: [], error: e.message || "Request failed" });
+      }
+    );
+  };
+
+  // When a case is opened, reload the list on return so new/updated cases show.
+  if (openId) return <CaseDetailView caseId={openId} onBack={() => { setOpenId(null); reload(); }} />;
+
+  const loading = token && (state.status === "idle" || state.status === "loading");
+
+  return (
+    <div className="ws">
+      <section className="masthead">
+        <div className="dotbar">
+          <span className="cap mono">+</span>
+          <span className="dotbar-txt mono">SECURERAG / CASES</span>
+          <span className="lead" />
+          <span className="dotbar-txt mono"><span className="g">v0.5</span></span>
+          <span className="cap mono">+</span>
+        </div>
+        <h1 className="mega"><WordWipe text="CASES" delay={0.2} /></h1>
+      </section>
+
+      <section className="panel">
+        <span className="stamp mono">[ x:01 ]</span>
+        <div className="panel-head">
+          <SysLabel title="CASE REGISTER" index="10" status={token ? "LIVE" : "LOCKED"} />
+          {token && state.status === "ready" && <span className="refresh mono">{state.rows.length} CASES</span>}
+        </div>
+
+        {!token && <LoginGate onLogin={login} />}
+
+        {loading && <p className="mono load-msg">// LOADING CASE REGISTER…</p>}
+
+        {token && state.status === "error" && (
+          <div className="state-err">
+            <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {state.error}</p>
+            <button type="button" className="ioc-btn mono" onClick={reload}>RETRY</button>
+          </div>
+        )}
+
+        {token && state.status === "ready" && state.rows.length === 0 && (
+          <p className="mono load-msg">// NO CASES YET — PROMOTE AN INVESTIGATION TO CREATE ONE.</p>
+        )}
+
+        {token && state.status === "ready" && state.rows.length > 0 && (
+          <div className="ev-wrap">
+            <table className="ev">
+              <thead>
+                <tr>
+                  <th>REF</th>
+                  <th>TITLE</th>
+                  <th>SEV</th>
+                  <th>STATUS</th>
+                  <th>OPENED BY</th>
+                  <th>CREATED</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.rows.map((r) => (
+                  <tr key={r.case_id} className="case-row" onClick={() => setOpenId(r.case_id)} tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === "Enter") setOpenId(r.case_id); }}>
+                    <td className="mono ref">{r.case_id.slice(0, 8)}</td>
+                    <td className="mono artifact" title={r.title}>{r.title}</td>
+                    <td><Sev level={r.severity} /></td>
+                    <td className="mono">{r.status}</td>
+                    <td className="mono">{r.created_by}</td>
+                    <td className="mono logged">{r.created_at}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <footer className="footer mono">
+        <span>© 2026 SecureRAG</span>
+        <span>Developed by Hemanth A R</span>
+      </footer>
+    </div>
+  );
+}
+
+/* ================================================================== */
 /*  Ingest — log file ingestion via POST /upload                       */
 /* ================================================================== */
 function IngestView() {
@@ -1948,6 +2236,8 @@ export default function App() {
               <ReportsView key="reports" lastInvestigation={lastInvestigation} />
             ) : active === "upload" ? (
               <IngestView key="upload" />
+            ) : active === "cases" ? (
+              <CasesView key="cases" />
             ) : active === "attack-graph" ? (
               <AttackGraphView key="attack-graph" />
             ) : (
@@ -2186,6 +2476,10 @@ body{ margin:0; background:var(--canvas); }
     animation-duration:.001ms!important; animation-iteration-count:1!important; transition-duration:.001ms!important; }
   .led{ animation:none; }
 }
+
+/* ---- Cases ---- */
+.case-row{ cursor:pointer; }
+.case-title{ font-size:1rem; color:var(--text); letter-spacing:0.02em; margin:0 0 var(--space-3); }
 
 /* ---- Ingest ---- */
 .ingest-file-input{ position:absolute; width:1px; height:1px; padding:0; margin:-1px;
