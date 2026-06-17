@@ -215,6 +215,17 @@ async function updateCase(token, caseId, fields) {
   return data.case;
 }
 
+async function fetchCaseNotes(token, caseId) {
+  const data = await apiFetch(`/cases/${encodeURIComponent(caseId)}/notes`, { token, method: "GET" });
+  return data.notes || [];
+}
+
+// POST returns the full notes list (newest-first) so the caller can replace state.
+async function addCaseNote(token, caseId, body) {
+  const data = await apiFetch(`/cases/${encodeURIComponent(caseId)}/notes`, { token, method: "POST", body: { body } });
+  return data.notes || [];
+}
+
 async function fetchAttackGraph(token, uploadId) {
   return apiFetch(`/attack-graph?upload_id=${encodeURIComponent(uploadId)}`, { token });
 }
@@ -1765,6 +1776,10 @@ function CaseDetailView({ caseId, onBack }) {
   const [state, setState] = useState({ status: "idle", data: null, error: "" });
   const [form, setForm] = useState({ status: "", severity: "", assigned_to: "", title: "" });
   const [save, setSave] = useState({ status: "idle", error: "" });
+  const [notes, setNotes] = useState([]);
+  const [notesStatus, setNotesStatus] = useState("idle");
+  const [draft, setDraft] = useState("");
+  const [noteSave, setNoteSave] = useState({ status: "idle", error: "" });
 
   const syncForm = (data) => setForm({
     status: data.status, severity: data.severity,
@@ -1818,6 +1833,37 @@ function CaseDetailView({ caseId, onBack }) {
           : e.status ? (e.message || `Request failed (${e.status})`)
           : "Network error — could not reach the server.";
         setSave({ status: "error", error: msg });
+      }
+    );
+  };
+
+  const loadNotes = useCallback(() => {
+    if (!token || !caseId) return;
+    fetchCaseNotes(token, caseId).then(
+      (rows) => { setNotes(rows); setNotesStatus("ready"); },
+      (e) => {
+        if (e.status === 401) { logout(); return; }
+        setNotesStatus("error");
+      }
+    );
+  }, [token, caseId, logout]);
+
+  useEffect(() => { loadNotes(); }, [loadNotes]);
+
+  const addNote = () => {
+    const body = draft.trim();
+    if (!token || !caseId || !body) return;
+    setNoteSave({ status: "saving", error: "" });
+    addCaseNote(token, caseId, body).then(
+      (rows) => { setNotes(rows); setNotesStatus("ready"); setDraft(""); setNoteSave({ status: "idle", error: "" }); },
+      (e) => {
+        if (e.status === 401) { logout(); setNoteSave({ status: "idle", error: "" }); return; }
+        const msg =
+          e.status === 403 ? "Insufficient privileges to add a note."
+          : e.status === 404 ? "Case not found."
+          : e.status ? (e.message || `Request failed (${e.status})`)
+          : "Network error — could not reach the server.";
+        setNoteSave({ status: "error", error: msg });
       }
     );
   };
@@ -1975,6 +2021,40 @@ function CaseDetailView({ caseId, onBack }) {
                   <p className="mono load-msg">// {events.length} EVENTS IN SNAPSHOT.</p>
                 )}
               </>
+            )}
+
+            <p className="mono dim">// CASE NOTES</p>
+            <div className="note-form">
+              <textarea
+                className="ioc-input mono note-textarea"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                rows={3}
+                placeholder="add an investigation note…"
+                aria-label="New case note"
+              />
+              <div className="ioc-fields" style={{ alignItems: "center" }}>
+                <button type="button" className="ioc-btn mono" onClick={addNote} disabled={noteSave.status === "saving" || !draft.trim()}>
+                  {noteSave.status === "saving" ? "…" : "ADD NOTE"}
+                </button>
+                {noteSave.status === "error" && (
+                  <p className="mono ioc-err"><AlertTriangle size={13} aria-hidden="true" /> {noteSave.error}</p>
+                )}
+              </div>
+            </div>
+            {notesStatus === "error" ? (
+              <p className="mono ioc-err"><AlertTriangle size={13} aria-hidden="true" /> Failed to load notes.</p>
+            ) : notes.length === 0 ? (
+              <p className="mono load-msg">// NO NOTES YET.</p>
+            ) : (
+              <ul className="note-list">
+                {notes.map((n) => (
+                  <li key={n.note_id} className="note-item">
+                    <div className="note-meta mono"><span className="g">{n.author}</span> <span className="dim">· {n.created_at}</span></div>
+                    <p className="mono note-body">{n.body}</p>
+                  </li>
+                ))}
+              </ul>
             )}
           </>
         )}
@@ -2557,6 +2637,13 @@ body{ margin:0; background:var(--canvas); }
 .case-ctl{ display:flex; flex-direction:column; gap:var(--space-2); }
 .case-ctl-label{ font-size:0.5625rem; letter-spacing:0.1em; color:var(--dim); }
 @media (max-width:600px){ .case-controls{ grid-template-columns:1fr; } }
+.note-form{ display:flex; flex-direction:column; gap:var(--space-3); margin-bottom:var(--space-4); }
+.note-textarea{ width:100%; resize:vertical; min-height:72px; line-height:1.5; }
+.note-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--space-3); }
+.note-item{ background:var(--surface); border:1px solid var(--hairline); border-left:2px solid var(--green);
+  padding:var(--space-3) var(--space-4); }
+.note-meta{ font-size:0.625rem; letter-spacing:0.04em; margin-bottom:var(--space-2); }
+.note-body{ font-size:0.8125rem; color:var(--text); line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0; }
 
 /* ---- Ingest ---- */
 .ingest-file-input{ position:absolute; width:1px; height:1px; padding:0; margin:-1px;

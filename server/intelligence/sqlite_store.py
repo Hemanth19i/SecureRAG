@@ -714,3 +714,43 @@ class SQLiteStore:
         finally:
             if own_conn is not None:
                 own_conn.close()
+
+    def add_case_note(self, case_id, author, body, conn=None):
+        """Append a note to a case. Honours the conn= convention so it can be
+        enlisted in a transaction()."""
+        managed = conn is None
+        own_conn = None
+        try:
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            conn.execute("""
+            INSERT INTO case_notes (case_id, author, body)
+            VALUES (?, ?, ?)
+            """, (case_id, author, body))
+            if managed:
+                conn.commit()
+        except Exception as e:
+            logger.error("Error adding case note: %s", e)
+            if not managed:
+                raise
+        finally:
+            if own_conn is not None:
+                own_conn.close()
+
+    def get_case_notes(self, case_id):
+        """Return a case's notes, newest first."""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT note_id, case_id, author, body, created_at "
+                "FROM case_notes WHERE case_id = ? ORDER BY note_id DESC",
+                (case_id,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error("Error getting case notes: %s", e)
+            return []

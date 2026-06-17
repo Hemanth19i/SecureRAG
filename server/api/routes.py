@@ -472,3 +472,41 @@ def update_case_endpoint(case_id):
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/cases/<case_id>/notes', methods=['POST'])
+@jwt_required()
+def add_case_note_endpoint(case_id):
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        data = request.json or {}
+        body = str(data.get("body", "")).strip()
+        if not body:
+            return jsonify({"error": "Note body is required"}), 400
+
+        sqlite = current_app.sqlite_store
+        if sqlite.get_case(case_id) is None:
+            return jsonify({"error": "Case not found"}), 404
+
+        author = get_jwt_identity()
+        with sqlite.transaction() as conn:
+            sqlite.add_case_note(case_id, author, body, conn=conn)
+
+        return jsonify({"notes": sqlite.get_case_notes(case_id)}), 201
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/cases/<case_id>/notes', methods=['GET'])
+@jwt_required()
+def list_case_notes_endpoint(case_id):
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        notes = current_app.sqlite_store.get_case_notes(case_id)
+        return jsonify({"notes": notes, "total": len(notes)}), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
