@@ -164,6 +164,11 @@ async function fetchCorrelations(token) {
   return mapCorrelations(data.correlations);
 }
 
+// Cache-first enrichment for one IOC. Returns the record {verdict, abuse_confidence, status, ...}.
+async function fetchEnrichment(token, value) {
+  return apiFetch(`/enrich?value=${encodeURIComponent(value)}`, { token, method: "GET" });
+}
+
 async function fetchMitreMap(token, text) {
   const data = await apiFetch("/mitre-map", { token, method: "POST", body: { text } });
   const techniques = data.techniques || [];
@@ -339,9 +344,28 @@ function buildGraphLayout(bNodes, bEdges) {
 /* ================================================================== */
 /*  Severity — single source of truth (colours used ONLY on severity) */
 /* ================================================================== */
-const SEVERITY_COLORS = { critical: "#ff4444", high: "#ff8c42", medium: "#ffd700", low: "#58a6ff" };
+const SEVERITY_COLORS = {
+  critical: "#ff4444", high: "#ff8c42", medium: "#ffd700", low: "#58a6ff",
+  // Threat-intel verdicts reuse the same palette so <Sev> can render them.
+  malicious: "#ff4444", suspicious: "#ff8c42", clean: "#3fb950", unknown: "#7d8590",
+};
 function severityColor(level) {
   return SEVERITY_COLORS[String(level).toLowerCase()] || "#7d8590";
+}
+
+// True only for routable public IPv4 — used to decide which IOCs are enrichable
+// (skips RFC1918 / loopback / link-local, and any non-IPv4 value).
+function isPublicIp(value) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(value).trim());
+  if (!m) return false;
+  const o = m.slice(1).map(Number);
+  if (o.some((n) => n > 255)) return false;
+  const [a, b] = o;
+  if (a === 0 || a === 10 || a === 127) return false;
+  if (a === 192 && b === 168) return false;
+  if (a === 172 && b >= 16 && b <= 31) return false;
+  if (a === 169 && b === 254) return false;
+  return true;
 }
 
 /* ================================================================== */
@@ -856,6 +880,8 @@ function LoginGate({ onLogin }) {
 function IOCExplorer() {
   const { token, login, logout } = useAuth();
   const [state, setState] = useState({ status: "idle", rows: [], error: "" });
+  const [enr, setEnr] = useState({});
+  const [enriching, setEnriching] = useState(false);
 
   // The effect performs no synchronous setState — results are applied inside
   // the deferred promise handlers, and "loading" is derived below.
@@ -863,7 +889,7 @@ function IOCExplorer() {
     if (!token) return;
     let active = true;
     fetchCorrelations(token).then(
-      (rows) => { if (active) setState({ status: "ready", rows, error: "" }); },
+      (rows) => { if (active) { setState({ status: "ready", rows, error: "" }); setEnr({}); } },
       (e) => {
         if (!active) return;
         if (e.status === 401) { logout(); setState({ status: "idle", rows: [], error: "" }); }
@@ -877,7 +903,7 @@ function IOCExplorer() {
     if (!token) return;
     setState({ status: "loading", rows: [], error: "" });
     fetchCorrelations(token).then(
-      (rows) => setState({ status: "ready", rows, error: "" }),
+      (rows) => { setState({ status: "ready", rows, error: "" }); setEnr({}); },
       (e) => {
         if (e.status === 401) { logout(); setState({ status: "idle", rows: [], error: "" }); }
         else setState({ status: "error", rows: [], error: e.message || "Request failed" });
@@ -886,6 +912,51 @@ function IOCExplorer() {
   };
 
   const loading = token && (state.status === "idle" || state.status === "loading");
+
+  // Threat-intel enrichment: only public IPs are enrichable (private IPs,
+  // hashes, emails, domains, etc. are skipped). Requests run sequentially to
+  // stay friendly to the provider's rate limit; the backend is cache-first.
+  const publicTargets = state.rows.filter((r) => isPublicIp(r.value));
+
+  const enrichAll = async () => {
+    if (!token || enriching || publicTargets.length === 0) return;
+    setEnriching(true);
+    setEnr((prev) => {
+      const next = { ...prev };
+      publicTargets.forEach((t) => { next[t.value] = { status: "loading" }; });
+      return next;
+    });
+    for (const t of publicTargets) {
+      try {
+        const data = await fetchEnrichment(token, t.value);
+        setEnr((prev) => ({ ...prev, [t.value]: data }));
+      } catch (e) {
+        if (e.status === 401) { logout(); setEnriching(false); return; }
+        setEnr((prev) => ({ ...prev, [t.value]: { status: e.status ? "error" : "network" } }));
+      }
+    }
+    setEnriching(false);
+  };
+
+  const repCell = (r) => {
+    if (!isPublicIp(r.value)) return <span className="dim">—</span>;
+    const e = enr[r.value];
+    if (!e) return <span className="dim">—</span>;
+    if (e.status === "loading") return <span className="mono dim">…</span>;
+    if (e.status === "ok") return <Sev level={e.verdict} />;
+    if (e.status === "unavailable") return <span className="mono dim">UNAVAILABLE</span>;
+    if (e.status === "unsupported") return <span className="dim">—</span>;
+    return <span className="mono enr-err">ERR</span>;
+  };
+
+  const abuseCell = (r) => {
+    if (!isPublicIp(r.value)) return "—";
+    const e = enr[r.value];
+    if (!e) return "—";
+    if (e.status === "loading") return "…";
+    if (e.status === "ok") return e.abuse_confidence ?? 0;
+    return "—";
+  };
 
   return (
     <div className="ws">
@@ -925,32 +996,46 @@ function IOCExplorer() {
         )}
 
         {token && state.status === "ready" && state.rows.length > 0 && (
-          <div className="ev-wrap">
-            <table className="ev">
-              <thead>
-                <tr>
-                  <th>INDICATOR</th>
-                  <th>CATEGORY</th>
-                  <th>ROLE</th>
-                  <th>RISK</th>
-                  <th className="num">FILES</th>
-                  <th className="num">FREQ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.rows.map((r) => (
-                  <tr key={r.value}>
-                    <td className="mono artifact" title={r.value}>{r.value}</td>
-                    <td className="mono">{r.category}</td>
-                    <td className="mono">{r.role}</td>
-                    <td><Sev level={r.risk} /></td>
-                    <td className="mono num">{r.files}</td>
-                    <td className="mono num">{r.freq}</td>
+          <>
+            <div className="ioc-fields" style={{ alignItems: "center", marginBottom: "var(--space-4)" }}>
+              <button type="button" className="ioc-btn mono" onClick={enrichAll} disabled={enriching || publicTargets.length === 0}>
+                {enriching ? "ENRICHING…" : "ENRICH ALL"}
+              </button>
+              <span className="refresh mono">
+                {publicTargets.length} PUBLIC IP{publicTargets.length === 1 ? "" : "S"} ENRICHABLE
+              </span>
+            </div>
+            <div className="ev-wrap">
+              <table className="ev">
+                <thead>
+                  <tr>
+                    <th>INDICATOR</th>
+                    <th>CATEGORY</th>
+                    <th>ROLE</th>
+                    <th>RISK</th>
+                    <th className="num">FILES</th>
+                    <th className="num">FREQ</th>
+                    <th>REPUTATION</th>
+                    <th className="num">ABUSE</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {state.rows.map((r) => (
+                    <tr key={r.value}>
+                      <td className="mono artifact" title={r.value}>{r.value}</td>
+                      <td className="mono">{r.category}</td>
+                      <td className="mono">{r.role}</td>
+                      <td><Sev level={r.risk} /></td>
+                      <td className="mono num">{r.files}</td>
+                      <td className="mono num">{r.freq}</td>
+                      <td>{repCell(r)}</td>
+                      <td className="mono num">{abuseCell(r)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
 
@@ -2628,6 +2713,9 @@ body{ margin:0; background:var(--canvas); }
     animation-duration:.001ms!important; animation-iteration-count:1!important; transition-duration:.001ms!important; }
   .led{ animation:none; }
 }
+
+/* ---- Threat-intel enrichment ---- */
+.enr-err{ color:#ff8c42; font-size:0.625rem; letter-spacing:0.06em; }
 
 /* ---- Cases ---- */
 .case-row{ cursor:pointer; }
