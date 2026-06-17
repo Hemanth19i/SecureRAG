@@ -426,3 +426,49 @@ def get_case_endpoint(case_id):
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/cases/<case_id>', methods=['PATCH'])
+@jwt_required()
+def update_case_endpoint(case_id):
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        data = request.json or {}
+        ALLOWED_STATUS = {"OPEN", "IN_PROGRESS", "CLOSED"}
+        ALLOWED_SEVERITY = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
+
+        updates = {}
+        if "status" in data:
+            status = str(data["status"]).upper()
+            if status not in ALLOWED_STATUS:
+                return jsonify({"error": "Invalid status. Use OPEN, IN_PROGRESS or CLOSED"}), 400
+            updates["status"] = status
+        if "severity" in data:
+            severity = str(data["severity"]).upper()
+            if severity not in ALLOWED_SEVERITY:
+                return jsonify({"error": "Invalid severity. Use CRITICAL, HIGH, MEDIUM or LOW"}), 400
+            updates["severity"] = severity
+        if "title" in data:
+            title = str(data["title"]).strip()
+            if not title:
+                return jsonify({"error": "Title cannot be empty"}), 400
+            updates["title"] = title
+        if "assigned_to" in data:
+            # Empty/null clears the assignee (stored as ""); a string assigns it.
+            updates["assigned_to"] = (data.get("assigned_to") or "")
+
+        if not updates:
+            return jsonify({"error": "No updatable fields provided"}), 400
+
+        sqlite = current_app.sqlite_store
+        with sqlite.transaction() as conn:
+            affected = sqlite.update_case(case_id, conn=conn, **updates)
+
+        if affected == 0:
+            return jsonify({"error": "Case not found"}), 404
+
+        return jsonify({"case": sqlite.get_case(case_id)}), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500

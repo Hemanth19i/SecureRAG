@@ -210,6 +210,11 @@ async function fetchCase(token, caseId) {
   return apiFetch(`/cases/${encodeURIComponent(caseId)}`, { token, method: "GET" });
 }
 
+async function updateCase(token, caseId, fields) {
+  const data = await apiFetch(`/cases/${encodeURIComponent(caseId)}`, { token, method: "PATCH", body: fields });
+  return data.case;
+}
+
 async function fetchAttackGraph(token, uploadId) {
   return apiFetch(`/attack-graph?upload_id=${encodeURIComponent(uploadId)}`, { token });
 }
@@ -1758,12 +1763,19 @@ function AttackGraphView() {
 function CaseDetailView({ caseId, onBack }) {
   const { token, login, logout } = useAuth();
   const [state, setState] = useState({ status: "idle", data: null, error: "" });
+  const [form, setForm] = useState({ status: "", severity: "", assigned_to: "", title: "" });
+  const [save, setSave] = useState({ status: "idle", error: "" });
+
+  const syncForm = (data) => setForm({
+    status: data.status, severity: data.severity,
+    assigned_to: data.assigned_to || "", title: data.title || "",
+  });
 
   useEffect(() => {
     if (!token || !caseId) return;
     let active = true;
     fetchCase(token, caseId).then(
-      (data) => { if (active) setState({ status: "ready", data, error: "" }); },
+      (data) => { if (active) { setState({ status: "ready", data, error: "" }); syncForm(data); setSave({ status: "idle", error: "" }); } },
       (e) => {
         if (!active) return;
         if (e.status === 401) { logout(); setState({ status: "idle", data: null, error: "" }); return; }
@@ -1777,7 +1789,7 @@ function CaseDetailView({ caseId, onBack }) {
     if (!token || !caseId) return;
     setState({ status: "loading", data: null, error: "" });
     fetchCase(token, caseId).then(
-      (data) => setState({ status: "ready", data, error: "" }),
+      (data) => { setState({ status: "ready", data, error: "" }); syncForm(data); setSave({ status: "idle", error: "" }); },
       (e) => {
         if (e.status === 401) { logout(); setState({ status: "idle", data: null, error: "" }); return; }
         setState({ status: "error", data: null, error: e.status === 404 ? "Case not found" : (e.message || "Request failed") });
@@ -1785,8 +1797,32 @@ function CaseDetailView({ caseId, onBack }) {
     );
   };
 
-  const loading = token && (state.status === "idle" || state.status === "loading");
   const c = state.data;
+
+  const saveCase = () => {
+    if (!token || !c) return;
+    setSave({ status: "saving", error: "" });
+    updateCase(token, caseId, {
+      title: form.title,
+      status: form.status,
+      severity: form.severity,
+      assigned_to: form.assigned_to,
+    }).then(
+      (updated) => { setState({ status: "ready", data: updated, error: "" }); syncForm(updated); setSave({ status: "saved", error: "" }); },
+      (e) => {
+        if (e.status === 401) { logout(); setSave({ status: "idle", error: "" }); return; }
+        const msg =
+          e.status === 403 ? "Insufficient privileges to update this case."
+          : e.status === 404 ? "Case not found."
+          : e.status === 400 ? (e.message || "Invalid update.")
+          : e.status ? (e.message || `Request failed (${e.status})`)
+          : "Network error — could not reach the server.";
+        setSave({ status: "error", error: msg });
+      }
+    );
+  };
+
+  const loading = token && (state.status === "idle" || state.status === "loading");
   const snap = c?.snapshot;
   const analysis = snap?.analysis;
   const analysisFailed = !!analysis?.error;
@@ -1837,6 +1873,42 @@ function CaseDetailView({ caseId, onBack }) {
               <span className="dim">· {c.created_by}</span>
               <span className="dim">· {c.created_at}</span>
             </p>
+
+            <p className="mono dim">// CASE CONTROLS</p>
+            <div className="case-controls">
+              <label className="case-ctl">
+                <span className="case-ctl-label mono">TITLE</span>
+                <input className="ioc-input mono" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} aria-label="Case title" />
+              </label>
+              <label className="case-ctl">
+                <span className="case-ctl-label mono">ASSIGNED TO</span>
+                <input className="ioc-input mono" value={form.assigned_to} placeholder="unassigned" onChange={(e) => setForm({ ...form, assigned_to: e.target.value })} aria-label="Assigned to" />
+              </label>
+              <label className="case-ctl">
+                <span className="case-ctl-label mono">STATUS</span>
+                <select className="ioc-input mono" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} aria-label="Case status">
+                  <option value="OPEN">OPEN</option>
+                  <option value="IN_PROGRESS">IN_PROGRESS</option>
+                  <option value="CLOSED">CLOSED</option>
+                </select>
+              </label>
+              <label className="case-ctl">
+                <span className="case-ctl-label mono">SEVERITY</span>
+                <select className="ioc-input mono" value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })} aria-label="Case severity">
+                  <option value="CRITICAL">CRITICAL</option>
+                  <option value="HIGH">HIGH</option>
+                  <option value="MEDIUM">MEDIUM</option>
+                  <option value="LOW">LOW</option>
+                </select>
+              </label>
+            </div>
+            <div className="ioc-fields" style={{ alignItems: "center", marginBottom: "var(--space-5)" }}>
+              <button type="button" className="ioc-btn mono" onClick={saveCase} disabled={save.status === "saving" || !form.title.trim()}>
+                {save.status === "saving" ? "…" : "SAVE CHANGES"}
+              </button>
+              {save.status === "saved" && <p className="mono load-msg"><span className="g">✓ SAVED</span></p>}
+              {save.status === "error" && <p className="mono ioc-err"><AlertTriangle size={13} aria-hidden="true" /> {save.error}</p>}
+            </div>
 
             {c.query && <p className="mono dim">// SOURCE QUERY: {c.query}</p>}
 
@@ -2480,6 +2552,11 @@ body{ margin:0; background:var(--canvas); }
 /* ---- Cases ---- */
 .case-row{ cursor:pointer; }
 .case-title{ font-size:1rem; color:var(--text); letter-spacing:0.02em; margin:0 0 var(--space-3); }
+.case-controls{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:var(--space-3) var(--space-4); margin-bottom:var(--space-4); }
+.case-ctl{ display:flex; flex-direction:column; gap:var(--space-2); }
+.case-ctl-label{ font-size:0.5625rem; letter-spacing:0.1em; color:var(--dim); }
+@media (max-width:600px){ .case-controls{ grid-template-columns:1fr; } }
 
 /* ---- Ingest ---- */
 .ingest-file-input{ position:absolute; width:1px; height:1px; padding:0; margin:-1px;

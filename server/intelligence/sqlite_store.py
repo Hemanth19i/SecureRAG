@@ -674,3 +674,43 @@ class SQLiteStore:
         except Exception as e:
             logger.error("Error listing cases: %s", e)
             return []
+
+    def update_case(self, case_id, status=None, severity=None, assigned_to=None,
+                    title=None, conn=None):
+        """Patch mutable case fields and bump updated_at. Only non-None args are
+        written. Returns the number of rows affected (0 -> case not found).
+        Honours the conn= convention for transaction() enlistment."""
+        managed = conn is None
+        own_conn = None
+        try:
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            sets, params = [], []
+            if status is not None:
+                sets.append("status = ?"); params.append(status)
+            if severity is not None:
+                sets.append("severity = ?"); params.append(severity)
+            if assigned_to is not None:
+                sets.append("assigned_to = ?"); params.append(assigned_to)
+            if title is not None:
+                sets.append("title = ?"); params.append(title)
+            if not sets:
+                return 0
+            sets.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(case_id)
+            cur = conn.execute(
+                "UPDATE cases SET " + ", ".join(sets) + " WHERE case_id = ?",
+                params,
+            )
+            if managed:
+                conn.commit()
+            return cur.rowcount
+        except Exception as e:
+            logger.error("Error updating case: %s", e)
+            if not managed:
+                raise
+            return 0
+        finally:
+            if own_conn is not None:
+                own_conn.close()
