@@ -4,7 +4,7 @@ import traceback
 from datetime import datetime
 import hashlib
 from flask import Blueprint, request, jsonify, current_app
-from flask_jwt_extended import jwt_required, get_jwt
+from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 from rag.chunker import chunk_text
 from rag.embedder import Embedder
 from intelligence.ioc_extractor import extract_iocs
@@ -353,6 +353,76 @@ def report_endpoint():
 
         report_text = generate_incident_report(data['analysis'])
         return jsonify({"report": report_text}), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/cases', methods=['POST'])
+@jwt_required()
+def create_case_endpoint():
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        data = request.json or {}
+        snapshot = data.get('snapshot')
+        # Pull severity/summary/query from the investigation snapshot when not
+        # supplied explicitly. snapshot mirrors the POST /query response shape.
+        analysis = snapshot.get('analysis') if isinstance(snapshot, dict) else None
+        analysis = analysis if isinstance(analysis, dict) else {}
+        query = data.get('query') or (snapshot.get('query') if isinstance(snapshot, dict) else "") or ""
+        title = data.get('title') or (query[:80] if query else None)
+        if not title:
+            return jsonify({"error": "A title or query is required"}), 400
+
+        severity = (data.get('severity') or analysis.get('severity') or "LOW").upper()
+        summary = data.get('summary') or analysis.get('summary') or ""
+        assigned_to = data.get('assigned_to')
+        created_by = get_jwt_identity()
+        case_id = str(uuid.uuid4())
+
+        sqlite = current_app.sqlite_store
+        with sqlite.transaction() as conn:
+            sqlite.create_case(
+                case_id, title, created_by,
+                severity=severity, summary=summary, query=query,
+                snapshot=snapshot, assigned_to=assigned_to, conn=conn,
+            )
+
+        return jsonify({"case": sqlite.get_case(case_id)}), 201
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/cases', methods=['GET'])
+@jwt_required()
+def list_cases_endpoint():
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        sqlite = current_app.sqlite_store
+        cases = sqlite.get_cases(
+            status=request.args.get('status'),
+            severity=request.args.get('severity'),
+            assigned_to=request.args.get('assigned_to'),
+        )
+        return jsonify({"cases": cases, "total": len(cases)}), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/cases/<case_id>', methods=['GET'])
+@jwt_required()
+def get_case_endpoint(case_id):
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        case = current_app.sqlite_store.get_case(case_id)
+        if case is None:
+            return jsonify({"error": "Case not found"}), 404
+        return jsonify(case), 200
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

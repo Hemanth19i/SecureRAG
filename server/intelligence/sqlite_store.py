@@ -138,6 +138,41 @@ class SQLiteStore:
             )
             """)
 
+            # 9. Cases (Case Management). snapshot_json holds a json.dumps()
+            # of the investigation result captured at promote time, following
+            # the JSON-in-TEXT precedent set by global_correlations.
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cases (
+                case_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'OPEN',
+                severity TEXT NOT NULL DEFAULT 'LOW',
+                summary TEXT,
+                query TEXT,
+                snapshot_json TEXT,
+                created_by TEXT NOT NULL,
+                assigned_to TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_cases_severity ON cases(severity)")
+
+            # 10. Case Notes (child of cases; cascade requires foreign_keys=ON,
+            # which get_connection() sets per-connection).
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS case_notes (
+                note_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                case_id TEXT NOT NULL,
+                author TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (case_id) REFERENCES cases(case_id) ON DELETE CASCADE
+            )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_case ON case_notes(case_id)")
+
             conn.commit()
             conn.close()
             logger.info("Initialized SQLite SIEM Store at %s", self.db_path)
@@ -558,4 +593,84 @@ class SQLiteStore:
             return [{"ioc_a": row["ioc_a"], "ioc_b": row["ioc_b"]} for row in rows]
         except Exception as e:
             logger.error("Error getting co-occurring IOCs for upload: %s", e)
+            return []
+
+    # --- Case Management -------------------------------------------------
+
+    def create_case(self, case_id, title, created_by, severity="LOW", summary="",
+                    query="", snapshot=None, assigned_to=None, conn=None):
+        """Insert a case. snapshot (any JSON-serialisable object) is stored as
+        json.dumps() in snapshot_json, mirroring store_global_correlation. Honours
+        the conn= convention so callers can enlist it in a transaction()."""
+        import json
+        managed = conn is None
+        own_conn = None
+        try:
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            conn.execute("""
+            INSERT INTO cases (case_id, title, severity, summary, query, snapshot_json, created_by, assigned_to)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                case_id, title, severity, summary, query,
+                json.dumps(snapshot) if snapshot is not None else None,
+                created_by, assigned_to,
+            ))
+            if managed:
+                conn.commit()
+        except Exception as e:
+            logger.error("Error creating case: %s", e)
+            if not managed:
+                raise
+        finally:
+            if own_conn is not None:
+                own_conn.close()
+
+    def get_case(self, case_id):
+        """Return one case with snapshot_json parsed back into a 'snapshot'
+        object, or None if it doesn't exist."""
+        import json
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM cases WHERE case_id = ?", (case_id,))
+            row = cursor.fetchone()
+            conn.close()
+            if not row:
+                return None
+            case = dict(row)
+            raw = case.pop("snapshot_json", None)
+            case["snapshot"] = json.loads(raw) if raw else None
+            return case
+        except Exception as e:
+            logger.error("Error getting case: %s", e)
+            return None
+
+    def get_cases(self, status=None, severity=None, assigned_to=None):
+        """List cases (newest first), excluding the heavy snapshot payload.
+        Optional filters are applied via parameterised WHERE clauses."""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            clauses = []
+            params = []
+            if status:
+                clauses.append("status = ?"); params.append(status)
+            if severity:
+                clauses.append("severity = ?"); params.append(severity)
+            if assigned_to:
+                clauses.append("assigned_to = ?"); params.append(assigned_to)
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            cursor.execute(
+                "SELECT case_id, title, status, severity, summary, query, "
+                "created_by, assigned_to, created_at, updated_at "
+                "FROM cases" + where + " ORDER BY updated_at DESC",
+                params,
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error("Error listing cases: %s", e)
             return []
