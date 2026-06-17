@@ -194,6 +194,12 @@ async function fetchStats(token) {
   return { readouts: data.readouts || {}, evidence: data.evidence || [] };
 }
 
+// Cursor-based alert poll. since = highest alert_id seen so far; returns
+// {alerts (newest-first, id>since), total, cursor}.
+async function fetchAlerts(token, since = 0) {
+  return apiFetch(`/alerts?since=${encodeURIComponent(since)}`, { token, method: "GET" });
+}
+
 async function fetchReport(token, analysis) {
   const data = await apiFetch("/report", { token, method: "POST", body: { analysis } });
   return data.report;
@@ -426,6 +432,28 @@ function useTick() {
   return n;
 }
 function fmtClock(d) { return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; }
+
+/* ================================================================== */
+/*  Polling (interval, paused when tab hidden) — for live monitoring  */
+/* ================================================================== */
+function usePoll(callback, intervalMs, enabled = true) {
+  // Ref indirection: the interval/visibility handlers always call the latest
+  // callback, and the effect never re-binds when the callback identity changes.
+  const cbRef = useRef(callback);
+  useEffect(() => { cbRef.current = callback; }, [callback]);
+  useEffect(() => {
+    if (!enabled) return;
+    let id = null;
+    const run = () => { if (!document.hidden) cbRef.current(); };
+    const start = () => { if (!id) id = setInterval(run, intervalMs); };
+    const stop = () => { if (id) { clearInterval(id); id = null; } };
+    const onVis = () => { if (document.hidden) stop(); else { cbRef.current(); start(); } };
+    cbRef.current();            // initial poll (setState happens async in the callback)
+    start();
+    document.addEventListener("visibilitychange", onVis);
+    return () => { stop(); document.removeEventListener("visibilitychange", onVis); };
+  }, [intervalMs, enabled]);
+}
 function fmtUptime(s) { return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`; }
 
 /* ================================================================== */
@@ -764,6 +792,88 @@ function Rail({ active, onSelect, open, onClose }) {
 /* ================================================================== */
 /*  Views                                                             */
 /* ================================================================== */
+/* ================================================================== */
+/*  Alert Stream — live cursor-polled feed from GET /alerts            */
+/* ================================================================== */
+function AlertStream({ token, onLogout }) {
+  const [alerts, setAlerts] = useState([]);
+  const [status, setStatus] = useState("idle"); // idle | ready | error
+  const [lastRefresh, setLastRefresh] = useState(null);
+  const cursorRef = useRef(0);
+
+  const poll = useCallback(() => {
+    if (!token) return;
+    fetchAlerts(token, cursorRef.current).then(
+      (data) => {
+        const fresh = data.alerts || [];
+        if (fresh.length) {
+          // fresh are newest-first and all newer than the cursor -> prepend.
+          setAlerts((prev) => [...fresh, ...prev].slice(0, 100));
+          if (data.cursor) cursorRef.current = data.cursor;
+        }
+        setStatus("ready");
+        setLastRefresh(new Date());
+      },
+      (e) => {
+        if (e.status === 401) { onLogout?.(); return; }
+        setStatus("error"); // keep existing alerts; the next tick retries
+      }
+    );
+  }, [token, onLogout]);
+
+  usePoll(poll, 10000, !!token);
+
+  const unacked = alerts.filter((a) => !a.acknowledged).length;
+  const statusLabel = status === "ready" ? "LIVE" : status === "error" ? "OFFLINE" : "…";
+
+  return (
+    <section className="panel">
+      <span className="stamp mono">[ x:05 ]</span>
+      <div className="panel-head">
+        <SysLabel title="ALERT STREAM" index="07" status={statusLabel} />
+        <span className="refresh mono">
+          {unacked} UNACKED{lastRefresh ? ` · LAST.REFRESH ${fmtClock(lastRefresh)}` : ""}
+        </span>
+      </div>
+
+      {status === "idle" && alerts.length === 0 && (
+        <p className="mono load-msg">// AWAITING ALERTS…</p>
+      )}
+      {status === "error" && alerts.length === 0 && (
+        <p className="mono load-msg"><AlertTriangle size={13} aria-hidden="true" /> CONNECTION LOST — RETRYING…</p>
+      )}
+      {status === "ready" && alerts.length === 0 && (
+        <p className="mono load-msg">// NO ALERTS.</p>
+      )}
+
+      {alerts.length > 0 && (
+        <div className="ev-wrap">
+          <table className="ev">
+            <thead>
+              <tr>
+                <th>SEV</th>
+                <th>TYPE</th>
+                <th>TITLE</th>
+                <th>TIME</th>
+              </tr>
+            </thead>
+            <tbody>
+              {alerts.map((a) => (
+                <tr key={a.alert_id}>
+                  <td><Sev level={a.severity} /></td>
+                  <td className="mono">{a.alert_type}</td>
+                  <td className="mono artifact" title={a.title}>{a.title}</td>
+                  <td className="mono logged">{a.created_at}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function Workstation() {
   const { token, login, logout } = useAuth();
   const [state, setState] = useState({ status: "idle", readouts: {}, evidence: [], error: "" });
@@ -835,6 +945,8 @@ function Workstation() {
           </div>
         </>
       )}
+
+      {token && <AlertStream token={token} onLogout={logout} />}
 
       <footer className="footer mono">
         <span>© 2026 SecureRAG</span>
