@@ -116,6 +116,35 @@ async function fetchAttackGraph(token, uploadId) {
   return apiFetch(`/attack-graph?upload_id=${encodeURIComponent(uploadId)}`, { token });
 }
 
+// Multipart upload — kept separate from apiFetch because the body is FormData
+// (browser sets the multipart boundary; we must NOT set Content-Type) and some
+// failure modes (e.g. 413 from Flask's MAX_CONTENT_LENGTH) return non-JSON HTML.
+async function uploadLog(token, file) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API}/upload`, {
+    method: "POST",
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: form,
+  });
+  let data = null;
+  try { data = await res.json(); } catch { /* non-JSON body (e.g. 413 HTML) */ }
+  if (!res.ok) {
+    const msg =
+      res.status === 401 ? "Unauthorized"
+      : res.status === 413 ? "File too large — exceeds the server upload limit."
+      : res.status === 409 ? (data?.upload_id
+          ? `File already ingested (upload ${String(data.upload_id).slice(0, 8)})`
+          : (data?.error || "File already ingested"))
+      : (data?.error || `Request failed (${res.status})`);
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
 /* ================================================================== */
 /*  Attack Graph layout helpers                                        */
 /* ================================================================== */
@@ -1536,6 +1565,123 @@ function AttackGraphView() {
   );
 }
 
+/* ================================================================== */
+/*  Ingest — log file ingestion via POST /upload                       */
+/* ================================================================== */
+function IngestView() {
+  const { token, login, logout } = useAuth();
+  const [file, setFile] = useState(null);
+  const [state, setState] = useState({ status: "idle", result: null, error: "" });
+  const inputRef = useRef(null);
+
+  const onPick = (e) => {
+    const f = e.target.files?.[0] || null;
+    setFile(f);
+    setState({ status: "idle", result: null, error: "" });
+  };
+
+  const submit = () => {
+    if (!token || !file) return;
+    setState({ status: "uploading", result: null, error: "" });
+    uploadLog(token, file).then(
+      (result) => setState({ status: "success", result, error: "" }),
+      (e) => {
+        if (e.status === 401) { logout(); setState({ status: "idle", result: null, error: "" }); return; }
+        setState({ status: "error", result: null, error: e.message || "Request failed" });
+      }
+    );
+  };
+
+  const reset = () => {
+    setFile(null);
+    setState({ status: "idle", result: null, error: "" });
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const uploading = state.status === "uploading";
+
+  return (
+    <div className="ws">
+      <section className="masthead">
+        <div className="dotbar">
+          <span className="cap mono">+</span>
+          <span className="dotbar-txt mono">SECURERAG / INGEST</span>
+          <span className="lead" />
+          <span className="dotbar-txt mono"><span className="g">v3.0</span></span>
+          <span className="cap mono">+</span>
+        </div>
+        <h1 className="mega"><WordWipe text="INGEST" delay={0.2} /></h1>
+      </section>
+
+      <section className="panel">
+        <span className="stamp mono">[ x:01 ]</span>
+        <div className="panel-head">
+          <SysLabel title="LOG INGESTION PIPELINE" index="01" status={token ? "LIVE" : "LOCKED"} />
+          {token && file && <span className="refresh mono">{file.name}</span>}
+        </div>
+
+        {!token && <LoginGate onLogin={login} />}
+
+        {token && state.status !== "success" && (
+          <>
+            <input
+              ref={inputRef}
+              type="file"
+              className="ingest-file-input"
+              onChange={onPick}
+              disabled={uploading}
+              aria-label="Select log file to ingest"
+            />
+            <div className="ioc-fields" style={{ marginBottom: "var(--space-5)" }}>
+              <button type="button" className="ioc-btn mono" onClick={() => inputRef.current?.click()} disabled={uploading}>
+                {file ? "CHANGE FILE" : "SELECT FILE"}
+              </button>
+              <button type="button" className="ioc-btn mono" onClick={submit} disabled={uploading || !file}>
+                {uploading ? "…" : "INGEST"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {token && state.status === "idle" && !file && (
+          <p className="mono load-msg"><UploadCloud size={14} aria-hidden="true" /> SELECT A LOG FILE TO INGEST</p>
+        )}
+
+        {token && state.status === "idle" && file && (
+          <p className="mono load-msg">// READY TO INGEST {file.name} ({(file.size / 1024).toFixed(1)} KB)</p>
+        )}
+
+        {token && uploading && (
+          <p className="mono load-msg">// INGESTING LOG FILE — PARSING, EMBEDDING &amp; EXTRACTING INDICATORS…</p>
+        )}
+
+        {token && state.status === "error" && (
+          <div className="state-err">
+            <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {state.error}</p>
+            <button type="button" className="ioc-btn mono" onClick={submit} disabled={!file}>RETRY</button>
+          </div>
+        )}
+
+        {token && state.status === "success" && (
+          <>
+            <p className="mono load-msg"><span className="g">✓</span> {state.result?.message || "File uploaded successfully"}</p>
+            <pre className="mono report-pre">{`FILE          ${file?.name ?? "—"}
+CHUNKS STORED ${state.result?.chunks_stored ?? 0}`}</pre>
+            <div className="ioc-fields">
+              <button type="button" className="ioc-btn mono" onClick={reset}>INGEST ANOTHER</button>
+            </div>
+          </>
+        )}
+      </section>
+
+      <footer className="footer mono">
+        <span>© 2026 SecureRAG</span>
+        <span>Developed by Hemanth A R</span>
+      </footer>
+    </div>
+  );
+}
+
 function ModuleView({ id }) {
   const reduce = useReducedMotion();
   const label = NAV_BY_ID[id]?.label;
@@ -1602,6 +1748,8 @@ export default function App() {
               <InvestigationView key="investigation" onResult={setLastInvestigation} />
             ) : active === "reports" ? (
               <ReportsView key="reports" lastInvestigation={lastInvestigation} />
+            ) : active === "upload" ? (
+              <IngestView key="upload" />
             ) : active === "attack-graph" ? (
               <AttackGraphView key="attack-graph" />
             ) : (
@@ -1840,6 +1988,10 @@ body{ margin:0; background:var(--canvas); }
     animation-duration:.001ms!important; animation-iteration-count:1!important; transition-duration:.001ms!important; }
   .led{ animation:none; }
 }
+
+/* ---- Ingest ---- */
+.ingest-file-input{ position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 
 /* ---- Attack Graph ---- */
 .ag-controls{ display:flex; align-items:center; gap:var(--space-3); margin-bottom:var(--space-5); flex-wrap:wrap; }
