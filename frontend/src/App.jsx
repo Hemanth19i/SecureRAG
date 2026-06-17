@@ -1669,6 +1669,8 @@ function AttackGraphView() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selectedNode, setSelectedNode] = useState(null);
+  const [enrMap, setEnrMap] = useState({});
+  const enrRef = useRef({});
 
   useEffect(() => {
     if (!token) return;
@@ -1712,6 +1714,43 @@ function AttackGraphView() {
   };
 
   const onNodeClick = useCallback((_, node) => setSelectedNode(node?.data?.meta || null), []);
+
+  // Enrich an IOC node on selection (cache-first per node via enrRef so a
+  // re-selection never refetches; the effect never depends on enrMap). State is
+  // only set inside async callbacks; backend classifies unsupported IOC types.
+  useEffect(() => {
+    const n = selectedNode;
+    if (!token || !n || n.type === "technique" || n.type === "upload") return;
+    const value = n.label;
+    if (!value || enrRef.current[value]) return;
+    let active = true;
+    fetchEnrichment(token, value).then(
+      (data) => { if (!active) return; enrRef.current[value] = data; setEnrMap((m) => ({ ...m, [value]: data })); },
+      (e) => {
+        if (!active) return;
+        if (e.status === 401) { logout(); return; }
+        const rec = { status: e.status ? "error" : "network" };
+        enrRef.current[value] = rec; setEnrMap((m) => ({ ...m, [value]: rec }));
+      }
+    );
+    return () => { active = false; };
+  }, [selectedNode, token, logout]);
+
+  const enrRep = (n) => {
+    const e = enrMap[n.label];
+    if (!e) return <span className="mono dim">…</span>;
+    if (e.status === "ok") return <Sev level={e.verdict} />;
+    if (e.status === "unavailable") return <span className="mono dim">UNAVAILABLE</span>;
+    if (e.status === "unsupported") return <span className="dim">—</span>;
+    return <span className="mono enr-err">ERR</span>;
+  };
+
+  const enrAbuse = (n) => {
+    const e = enrMap[n.label];
+    if (!e) return "…";
+    if (e.status === "ok") return e.abuse_confidence ?? 0;
+    return "—";
+  };
 
   return (
     <div className="ws">
@@ -1832,6 +1871,8 @@ function AttackGraphView() {
                       <>
                         <div><dt>ROLE</dt><dd>{selectedNode.role || "—"}</dd></div>
                         <div><dt>RISK</dt><dd>{selectedNode.risk_level ? <Sev level={selectedNode.risk_level} /> : "—"}</dd></div>
+                        <div><dt>REPUTATION</dt><dd>{enrRep(selectedNode)}</dd></div>
+                        <div><dt>ABUSE</dt><dd>{enrAbuse(selectedNode)}</dd></div>
                       </>
                     )}
                     {selectedNode.type === "upload" && (
