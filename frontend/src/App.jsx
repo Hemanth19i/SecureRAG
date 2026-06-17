@@ -193,6 +193,13 @@ async function fetchReport(token, analysis) {
   return data.report;
 }
 
+// Promote an investigation result into a persisted case. Returns the created
+// case object ({ case_id, ... }) from POST /cases.
+async function createCase(token, query, snapshot) {
+  const data = await apiFetch("/cases", { token, method: "POST", body: { query, snapshot } });
+  return data.case;
+}
+
 async function fetchAttackGraph(token, uploadId) {
   return apiFetch(`/attack-graph?upload_id=${encodeURIComponent(uploadId)}`, { token });
 }
@@ -1168,10 +1175,12 @@ function InvestigationView({ onResult }) {
   const { token, login, logout } = useAuth();
   const [query, setQuery] = useState("");
   const [state, setState] = useState({ status: "idle", result: null, error: "" });
+  const [promo, setPromo] = useState({ status: "idle", caseId: "", error: "" });
 
   const analyze = () => {
     if (!token || !query.trim()) return;
     setState({ status: "loading", result: null, error: "" });
+    setPromo({ status: "idle", caseId: "", error: "" });
     fetchQuery(token, query).then(
       (result) => {
         setState({ status: "ready", result, error: "" });
@@ -1185,6 +1194,23 @@ function InvestigationView({ onResult }) {
   };
 
   const result = state.result;
+
+  const promote = () => {
+    if (!token || !result) return;
+    setPromo({ status: "loading", caseId: "", error: "" });
+    createCase(token, result.query || query, result).then(
+      (created) => setPromo({ status: "ready", caseId: created?.case_id || "", error: "" }),
+      (e) => {
+        if (e.status === 401) { logout(); setPromo({ status: "idle", caseId: "", error: "" }); return; }
+        const msg =
+          e.status === 403 ? "Insufficient privileges — ADMIN or ANALYST required to create a case."
+          : e.status ? (e.message || `Request failed (${e.status})`)
+          : "Network error — could not reach the server.";
+        setPromo({ status: "error", caseId: "", error: msg });
+      }
+    );
+  };
+
   const analysis = result?.analysis;
   const analysisFailed = !!analysis?.error;
   const iocRows = Object.entries(result?.iocs || {}).flatMap(([type, values]) =>
@@ -1244,6 +1270,22 @@ function InvestigationView({ onResult }) {
           <div className="state-err">
             <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {state.error}</p>
             <button type="button" className="ioc-btn mono" onClick={analyze}>RETRY</button>
+          </div>
+        )}
+
+        {token && state.status === "ready" && result && (
+          <div className="ioc-fields" style={{ alignItems: "center", marginBottom: "var(--space-5)" }}>
+            {promo.status !== "ready" && (
+              <button type="button" className="ioc-btn mono" onClick={promote} disabled={promo.status === "loading"}>
+                {promo.status === "loading" ? "…" : "PROMOTE TO CASE"}
+              </button>
+            )}
+            {promo.status === "ready" && (
+              <p className="mono load-msg"><span className="g">✓ CASE CREATED</span> · <span className="g">{promo.caseId}</span></p>
+            )}
+            {promo.status === "error" && (
+              <p className="mono ioc-err"><AlertTriangle size={13} aria-hidden="true" /> {promo.error}</p>
+            )}
           </div>
         )}
 
