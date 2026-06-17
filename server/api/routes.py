@@ -14,6 +14,7 @@ from intelligence.timeline_gen import generate_timeline, format_timeline_string
 from intelligence.correlator import correlate_iocs, get_correlation_summary, generate_analyst_insights
 from intelligence.attack_graph import build_attack_graph
 from intelligence.threat_intel import get_enrichment
+from intelligence.alerts import build_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,8 @@ def upload_log():
         # All writes for this upload run in a single transaction: if any row
         # fails, the whole upload is rolled back rather than left half-ingested.
         sqlite = current_app.sqlite_store
+        agg_mitre = []
+        agg_timeline = []
         with sqlite.transaction() as conn:
             for i, chunk_text_content in enumerate(chunks):
                 chunk_id = chunk_ids[i]
@@ -128,11 +131,13 @@ def upload_log():
 
                 # 3. MITRE mapping
                 mitre_matches = map_to_mitre(chunk_text_content)
+                agg_mitre.extend(mitre_matches)
                 for match in mitre_matches:
                     sqlite.store_mitre_mapping(chunk_id, match["technique"], match["tactic"], match.get("confidence", "UNKNOWN"), conn=conn)
 
                 # 4. Timeline generation — same pipeline as /query and /timeline
                 timeline_events = generate_timeline(chunk_text_content, mitre_matches)
+                agg_timeline.extend(timeline_events)
                 for ev in timeline_events:
                     sqlite.store_timeline_event(chunk_id, ev["timestamp"], ev["description"], ev["severity"], conn=conn)
 
@@ -142,6 +147,14 @@ def upload_log():
         all_iocs = sqlite.get_all_extracted_iocs()
         global_correlations = correlate_iocs(all_iocs, sqlite)
         sqlite.store_global_correlation(global_correlations)
+
+        # Generate real-time alerts from this upload's existing analysis outputs.
+        alerts = build_alerts(agg_timeline, agg_mitre, global_correlations,
+                              source=file.filename, upload_id=upload_id)
+        if alerts:
+            with sqlite.transaction() as conn:
+                for a in alerts:
+                    sqlite.store_alert(a, conn=conn)
 
         return jsonify({"message": "File uploaded successfully", "chunks_stored": len(chunks)}), 200
 
@@ -527,6 +540,30 @@ def enrich_endpoint():
         # provider failures, and unsupported IOC types without raising.
         result = get_enrichment(current_app.sqlite_store, value)
         return jsonify(result), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/alerts', methods=['GET'])
+@jwt_required()
+def list_alerts_endpoint():
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        try:
+            since = int(request.args.get('since', 0))
+        except (TypeError, ValueError):
+            since = 0
+        try:
+            limit = int(request.args.get('limit', 50))
+        except (TypeError, ValueError):
+            limit = 50
+        limit = max(1, min(limit, 200))
+
+        alerts = current_app.sqlite_store.get_alerts(since_id=since, limit=limit)
+        cursor = alerts[0]["alert_id"] if alerts else since
+        return jsonify({"alerts": alerts, "total": len(alerts), "cursor": cursor}), 200
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

@@ -193,6 +193,27 @@ class SQLiteStore:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_enrich_verdict ON ioc_enrichment(verdict)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_enrich_expires ON ioc_enrichment(expires_at)")
 
+            # 12. Alerts (Real-Time Monitoring). alert_id is the monotonic poll
+            # cursor; details holds the evidence JSON. Generated from existing
+            # analysis outputs during ingestion.
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS alerts (
+                alert_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                severity TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                ioc_value TEXT,
+                technique_id TEXT,
+                source TEXT,
+                upload_id TEXT,
+                details TEXT,
+                acknowledged INTEGER DEFAULT 0
+            )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ack ON alerts(acknowledged)")
+
             conn.commit()
             conn.close()
             logger.info("Initialized SQLite SIEM Store at %s", self.db_path)
@@ -838,3 +859,64 @@ class SQLiteStore:
         except Exception as e:
             logger.error("Error getting IOC enrichment: %s", e)
             return None
+
+    # --- Alerts (Real-Time Monitoring) ------------------------------------
+
+    def store_alert(self, alert, conn=None):
+        """Insert one alert. details is JSON-encoded. Honours the conn=
+        convention for transaction() enlistment."""
+        import json
+        managed = conn is None
+        own_conn = None
+        try:
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            conn.execute("""
+            INSERT INTO alerts
+            (severity, alert_type, title, ioc_value, technique_id, source, upload_id, details)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                alert.get("severity"),
+                alert.get("alert_type"),
+                alert.get("title"),
+                alert.get("ioc_value"),
+                alert.get("technique_id"),
+                alert.get("source"),
+                alert.get("upload_id"),
+                json.dumps(alert.get("details") or {}),
+            ))
+            if managed:
+                conn.commit()
+        except Exception as e:
+            logger.error("Error storing alert: %s", e)
+            if not managed:
+                raise
+        finally:
+            if own_conn is not None:
+                own_conn.close()
+
+    def get_alerts(self, since_id=0, limit=50):
+        """Return alerts with alert_id > since_id, newest first, details parsed.
+        since_id supports cursor-based delta polling; default returns latest."""
+        import json
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM alerts WHERE alert_id > ? ORDER BY alert_id DESC LIMIT ?",
+                (since_id, limit),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            out = []
+            for row in rows:
+                rec = dict(row)
+                raw = rec.pop("details", None)
+                rec["details"] = json.loads(raw) if raw else {}
+                rec["acknowledged"] = bool(rec.get("acknowledged"))
+                out.append(rec)
+            return out
+        except Exception as e:
+            logger.error("Error getting alerts: %s", e)
+            return []
