@@ -12,6 +12,7 @@ import {
   Database,
   Network,
   Crosshair,
+  Gauge,
   Menu,
   X,
   ArrowRight,
@@ -187,6 +188,12 @@ async function fetchTimeline(token, text) {
 
 async function fetchQuery(token, query) {
   return apiFetch("/query", { token, method: "POST", body: { query } });
+}
+
+// Retrieval-only evaluation: returns ranked chunks, similarity/distance,
+// source evidence, and per-stage latency (no LLM/IOC/MITRE analysis).
+async function retrievalEval(token, query, topK) {
+  return apiFetch("/retrieval/eval", { token, method: "POST", body: { query, top_k: topK } });
 }
 
 async function fetchStats(token) {
@@ -398,6 +405,7 @@ const NAV = [
   { id: "reports", label: "REPORTS", icon: FileText },
   { id: "attack-graph", label: "ATTACK GRAPH", icon: Network },
   { id: "cases", label: "CASES", icon: Briefcase },
+  { id: "retrieval", label: "RAG EVAL", icon: Gauge },
 ];
 const NAV_BY_ID = Object.fromEntries(NAV.map((n) => [n.id, n]));
 
@@ -2667,6 +2675,154 @@ function ModuleView({ id }) {
 /* ================================================================== */
 /*  App shell                                                         */
 /* ================================================================== */
+/* ================================================================== */
+/*  RAG Eval — retrieval-only evaluation via POST /retrieval/eval      */
+/* ================================================================== */
+function ScoreBar({ score }) {
+  if (score == null) return <span className="dim">—</span>;
+  const pct = Math.max(0, Math.min(score * 100, 100));
+  return (
+    <span className="score-cell">
+      <span className="score-bar"><span className="score-fill" style={{ width: `${pct}%` }} /></span>
+      <span className="score-val">{score.toFixed(3)}</span>
+    </span>
+  );
+}
+
+function RetrievalEvalView() {
+  const { token, login, logout } = useAuth();
+  const [text, setText] = useState("");
+  const [topK, setTopK] = useState(5);
+  const [state, setState] = useState({ status: "idle", data: null, error: "" });
+
+  const run = () => {
+    if (!token || !text.trim()) return;
+    setState({ status: "loading", data: null, error: "" });
+    const k = Math.max(1, Math.min(parseInt(topK, 10) || 5, 50));
+    retrievalEval(token, text, k).then(
+      (data) => setState({ status: "ready", data, error: "" }),
+      (e) => {
+        if (e.status === 401) { logout(); setState({ status: "idle", data: null, error: "" }); }
+        else setState({ status: "error", data: null, error: e.message || "Request failed" });
+      }
+    );
+  };
+
+  const d = state.data;
+  const results = d?.results || [];
+  const lat = d?.latency_ms;
+
+  return (
+    <div className="ws">
+      <section className="masthead">
+        <div className="dotbar">
+          <span className="cap mono">+</span>
+          <span className="dotbar-txt mono">SECURERAG / RAG EVAL</span>
+          <span className="lead" />
+          <span className="dotbar-txt mono"><span className="g">v1.0</span></span>
+          <span className="cap mono">+</span>
+        </div>
+        <h1 className="mega"><WordWipe text="RAG EVAL" delay={0.2} /></h1>
+      </section>
+
+      <section className="panel">
+        <span className="stamp mono">[ x:01 ]</span>
+        <div className="panel-head">
+          <SysLabel title="RETRIEVAL EVALUATION" index="09" status={token ? "LIVE" : "LOCKED"} />
+          {token && state.status === "ready" && (
+            <span className="refresh mono">{d.count} CHUNKS · {lat?.total}ms</span>
+          )}
+        </div>
+
+        {!token && <LoginGate onLogin={login} />}
+
+        {token && (
+          <div className="mitre-input">
+            <textarea
+              className="ioc-input mono mitre-textarea"
+              placeholder="enter a retrieval query to evaluate semantic search…"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={3}
+              aria-label="Retrieval query"
+            />
+            <div className="rag-controls">
+              <label className="rag-topk mono">
+                TOP_K
+                <input
+                  type="number" min={1} max={50}
+                  className="ioc-input mono rag-topk-input"
+                  value={topK}
+                  onChange={(e) => setTopK(e.target.value)}
+                  aria-label="Number of chunks to retrieve"
+                />
+              </label>
+              <button type="button" className="ioc-btn mono" onClick={run} disabled={state.status === "loading" || !text.trim()}>
+                {state.status === "loading" ? "…" : "RETRIEVE"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {token && state.status === "loading" && (
+          <p className="mono load-msg">// RETRIEVING…</p>
+        )}
+
+        {token && state.status === "error" && (
+          <div className="state-err">
+            <p className="mono"><AlertTriangle size={14} aria-hidden="true" /> {state.error}</p>
+            <button type="button" className="ioc-btn mono" onClick={run}>RETRY</button>
+          </div>
+        )}
+
+        {token && state.status === "ready" && lat && (
+          <div className="rag-lat mono">
+            <span className="rag-lat-item">EMBED <b>{lat.embed}ms</b></span>
+            <span className="rag-lat-item">SEARCH <b>{lat.search}ms</b></span>
+            <span className="rag-lat-item">TOTAL <b>{lat.total}ms</b></span>
+          </div>
+        )}
+
+        {token && state.status === "ready" && results.length === 0 && (
+          <p className="mono load-msg">// NO CHUNKS RETRIEVED. INGEST LOGS FIRST.</p>
+        )}
+
+        {token && state.status === "ready" && results.length > 0 && (
+          <div className="ev-wrap">
+            <table className="ev">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>SIMILARITY</th>
+                  <th>DISTANCE</th>
+                  <th>SOURCE</th>
+                  <th>EVIDENCE</th>
+                </tr>
+              </thead>
+              <tbody>
+                {results.map((r) => (
+                  <tr key={r.rank}>
+                    <td className="mono">{r.rank}</td>
+                    <td className="mono"><ScoreBar score={r.similarity} /></td>
+                    <td className="mono logged">{r.distance ?? "—"}</td>
+                    <td className="mono artifact" title={r.source_file || ""}>{r.source_file || "—"}</td>
+                    <td className="mono" title={r.evidence}>{(r.evidence || "").slice(0, 160)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <footer className="footer mono">
+        <span>© 2026 SecureRAG</span>
+        <span>Developed by Hemanth A R</span>
+      </footer>
+    </div>
+  );
+}
+
 export default function App() {
   const [active, setActive] = useState("dashboard");
   const [open, setOpen] = useState(false);
@@ -2730,6 +2886,8 @@ export default function App() {
               <CasesView key="cases" />
             ) : active === "attack-graph" ? (
               <AttackGraphView key="attack-graph" />
+            ) : active === "retrieval" ? (
+              <RetrievalEvalView key="retrieval" />
             ) : (
               <ModuleView key={active} id={active} />
             )}
@@ -2882,6 +3040,19 @@ body{ margin:0; background:var(--canvas); }
 .ack-done{ color:var(--dim); font-size:0.5625rem; letter-spacing:0.08em; }
 .ev tbody tr.ack-row{ opacity:0.5; }
 .ev tbody tr.ack-row:hover{ opacity:0.75; }
+
+/* ---- RAG eval ---- */
+.rag-controls{ display:flex; align-items:center; gap:var(--space-4); margin-top:var(--space-3); }
+.rag-topk{ display:inline-flex; align-items:center; gap:var(--space-2); font-size:0.625rem; letter-spacing:0.08em; color:var(--dim); }
+.rag-topk-input{ width:72px; padding:var(--space-2) var(--space-3); }
+.rag-lat{ display:flex; flex-wrap:wrap; gap:var(--space-3) var(--space-5); margin:var(--space-4) 0;
+  font-size:0.6875rem; letter-spacing:0.04em; color:var(--muted); }
+.rag-lat-item b{ color:var(--green); font-weight:600; }
+.score-cell{ display:inline-flex; align-items:center; gap:var(--space-2); }
+.score-bar{ display:inline-block; width:54px; height:6px; background:rgba(255,255,255,0.06);
+  border:1px solid var(--hairline); position:relative; }
+.score-fill{ display:block; height:100%; background:var(--green); }
+.score-val{ font-size:0.6875rem; color:var(--text); }
 
 /* ---- Module rows ---- */
 .modlist{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--space-2); }
