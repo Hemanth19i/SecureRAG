@@ -252,6 +252,34 @@ From the repo root: `make test`, `make lint`, `make test-integration`.
 - **CI** (`.github/workflows/ci.yml`) runs ruff + pytest (excluding integration)
   on every push and PR (Python 3.11), with pip caching.
 
+## Retrieval Evaluation (RAG metrics)
+
+Retrieval is measured with a labeled harness ([`server/eval/`](server/eval/)): a
+**30-entry SOC-log corpus** with **10 query→target pairs**. Relevance is exact —
+a query is a hit at rank *r* iff the retrieved chunk id at *r* is the labeled
+target. Metrics are computed over the **real** stack (SentenceTransformer
+`all-MiniLM-L6-v2` + ChromaDB).
+
+```bash
+cd server
+python eval/recall_eval.py            # semantic baseline
+```
+
+**Results — semantic (baseline):**
+
+| Metric | Semantic |
+|---|---|
+| Recall@1 | 0.80 |
+| Recall@3 | 1.00 |
+| Recall@5 | 1.00 |
+| MRR | 0.90 |
+
+*Methodology:* corpus = 30 entries, queries = 10, K ∈ {1, 3, 5}, relevance =
+exact id match, measured on the real embedding + vector-store path. Recall@3/@5
+saturate on a 30-entry corpus, so **Recall@1 and MRR are the discriminating
+metrics**. Hybrid-retrieval + reranking comparison is added in the section update
+once those land.
+
 ## Security Notes
 
 - Secrets live only in `server/.env` (gitignored). Never commit real keys.
