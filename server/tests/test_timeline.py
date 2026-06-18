@@ -24,16 +24,24 @@ def test_each_event_has_contract_keys():
             assert key in ev, f"missing {key}"
 
 
-def test_text_without_timestamps_yields_unknown_marker():
-    timeline = generate_timeline("Failed password for admin", map_to_mitre("Failed password for admin"))
-    assert timeline
-    assert timeline[0]["timestamp"] == "T+unknown"
+def test_timestamped_document_still_produces_ordered_events():
+    # Proves only the empty path changed: a timestamped doc still yields a
+    # non-empty, chronologically ordered timeline.
+    text = (
+        "2026-06-15 02:00:00 Failed password for admin from 203.0.113.45\n"
+        "2026-06-15 02:05:00 Accepted password for admin from 203.0.113.45\n"
+    )
+    events = generate_timeline(text, map_to_mitre(text))
+    assert len(events) >= 1
+    timestamps = [e["timestamp"] for e in events]
+    assert timestamps == sorted(timestamps)
 
 
-def test_empty_text_yields_single_unknown_placeholder():
-    # No timestamps (incl. empty input) -> the "no events" branch emits one
-    # T+unknown placeholder rather than an empty list.
-    tl = generate_timeline("", [])
-    assert len(tl) == 1
-    assert tl[0]["timestamp"] == "T+unknown"
-    assert tl[0]["mitre_technique"] == "None"
+def test_text_without_timestamps_returns_empty():
+    # Content but no parseable timestamps -> empty timeline (no T+unknown event).
+    text = "Failed password for admin"
+    assert generate_timeline(text, map_to_mitre(text)) == []
+
+
+def test_empty_text_returns_empty():
+    assert generate_timeline("", []) == []

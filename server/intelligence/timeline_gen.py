@@ -81,23 +81,11 @@ def generate_timeline(log_text: str, mitre_results: list) -> list[dict]:
     try:
         events = extract_timestamps(log_text)
         timeline = []
-        
-        if not events:
-            mitre_match = map_to_mitre(log_text)
-            technique = mitre_match[0]["technique"] if mitre_match else "None"
-            tactic = mitre_match[0]["tactic"] if mitre_match else "Unknown"
-            desc = log_text.strip()[:100] + ("..." if len(log_text.strip()) > 100 else "")
-            
-            timeline.append({
-                "timestamp": "T+unknown",
-                "event_type": tactic.upper(),
-                "description": desc,
-                "mitre_technique": technique,
-                "severity": mitre_match[0].get("confidence", "UNKNOWN") if mitre_match else "UNKNOWN",
-                "count": 1,
-                "phase_order": 99
-            })
 
+        # No parseable timestamps -> no timeline. Callers treat an empty list as
+        # "no events"; format_timeline_string([]) yields a human-readable message.
+        if not events:
+            return []
 
         # Deduplication mapping by minute bucket
         seen = {}

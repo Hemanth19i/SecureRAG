@@ -69,6 +69,11 @@ breaking API change and must be intentional.
 }
 ```
 
+## Empty states
+- When the analyzed text has **no parseable timestamps**, `timeline.events` is
+  `[]` and `timeline.summary` is the string `"No timeline events found."`
+  (`generate_timeline()` returns `[]` — there is no `T+unknown` placeholder event).
+
 ## Locked invariants (the 4 nuances)
 1. `mitre` items are under `mitre.techniques` (+ `mitre.kill_chain`), each also
    carrying `name`, `inferred`, `note` beyond `confidence/evidence/tactic/technique/phase`.
