@@ -1,4 +1,5 @@
 import os
+import time
 import uuid
 import logging
 import traceback
@@ -314,6 +315,76 @@ def query_system():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": "Internal server error"}), 500
+@api_bp.route('/retrieval/eval', methods=['POST'])
+@jwt_required()
+def retrieval_eval_endpoint():
+    """Retrieval-only evaluation: embed the query, run vector search, and return
+    the retrieved chunks with similarity scores, source evidence, and per-stage
+    latency. Unlike /query this skips IOC/MITRE/timeline/LLM analysis so it
+    isolates and measures the RAG retrieval step itself."""
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        data = request.json or {}
+        query_text = data.get('query')
+        if not isinstance(query_text, str) or not query_text.strip():
+            return jsonify({"error": "query must be a non-empty string"}), 400
+        if len(query_text) > MAX_QUERY_CHARS:
+            return jsonify({"error": "query exceeds %d characters" % MAX_QUERY_CHARS}), 400
+        try:
+            top_k = int(data.get('top_k', 5))
+        except (TypeError, ValueError):
+            return jsonify({"error": "top_k must be an integer"}), 400
+        top_k = max(1, min(top_k, MAX_TOP_K))
+
+        t0 = time.perf_counter()
+        query_embedding = embedder.embed_query(query_text)
+        t1 = time.perf_counter()
+        if not query_embedding:
+            return jsonify({"error": "Failed to embed query"}), 500
+
+        raw = current_app.vector_store.query_similar(query_embedding, top_k)
+        t2 = time.perf_counter()
+
+        docs = (raw.get('documents') or [[]])[0] if raw else []
+        metas = (raw.get('metadatas') or [[]])[0] if raw else []
+        dists = (raw.get('distances') or [[]])[0] if raw else []
+
+        results = []
+        for i in range(len(docs)):
+            distance = float(dists[i]) if i < len(dists) and dists[i] is not None else None
+            # ChromaDB returns L2 distance; map to a 0-1 similarity for display.
+            similarity = round(1.0 / (1.0 + distance), 4) if distance is not None else None
+            meta = metas[i] if i < len(metas) else {}
+            meta = meta or {}
+            results.append({
+                "rank": i + 1,
+                "similarity": similarity,
+                "distance": round(distance, 4) if distance is not None else None,
+                "source_file": meta.get("source_file") or meta.get("filename"),
+                "upload_id": meta.get("upload_id"),
+                "chunk_id": meta.get("chunk_id"),
+                "evidence": docs[i],
+            })
+
+        return jsonify({
+            "query": query_text,
+            "top_k": top_k,
+            "count": len(results),
+            "results": results,
+            "latency_ms": {
+                "embed": round((t1 - t0) * 1000, 2),
+                "search": round((t2 - t1) * 1000, 2),
+                "total": round((t2 - t0) * 1000, 2),
+            },
+            # Forward-compatible hook for ground-truth Recall@K (not yet computed).
+            "recall_at_k": None,
+        }), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": "Internal server error"}), 500
+
 @api_bp.route('/stats', methods=['GET'])
 @jwt_required()
 def stats_endpoint():
