@@ -26,13 +26,24 @@ def create_app():
     app = Flask(__name__)
     CORS(app, resources={r"/*": {"origins": os.getenv("CORS_ORIGINS", "http://localhost:5173")}})
 
-    # Configure JWT. Fail closed: refuse to start without a configured secret
-    # rather than silently falling back to a guessable default.
+    # Configure JWT. Fail closed: refuse to start without a STRONG secret rather
+    # than running with a missing, short, or placeholder (guessable) key.
     jwt_secret = os.getenv("JWT_SECRET_KEY")
     if not jwt_secret:
         raise RuntimeError(
             "JWT_SECRET_KEY is not set. Refusing to start with an insecure default. "
             "Set JWT_SECRET_KEY in the environment (see .env.example)."
+        )
+    weak_jwt_secrets = {
+        "your_random_secret_here", "generate_a_strong_random_secret",
+        "change-me", "changeme", "secret", "password",
+        "securerag-super-secret-key-change-in-prod-2024",
+    }
+    if len(jwt_secret) < 32 or jwt_secret.lower() in weak_jwt_secrets:
+        raise RuntimeError(
+            "JWT_SECRET_KEY is too weak. Use at least 32 random characters, e.g. "
+            "python -c \"import secrets; print(secrets.token_urlsafe(48))\". "
+            "Refusing to start."
         )
     app.config["JWT_SECRET_KEY"] = jwt_secret
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=15)
@@ -66,6 +77,15 @@ def create_app():
             default_admin = app.sqlite_store.get_user_by_username("admin")
             if not default_admin:
                 admin_password = os.getenv("DEFAULT_ADMIN_PASSWORD")
+                # Reject weak bootstrap passwords: ignore them and generate a
+                # strong random one rather than shipping guessable admin creds.
+                weak_admin_passwords = {"admin", "admin123", "password", "123456", "changeme", "secret"}
+                if admin_password and (len(admin_password) < 12 or admin_password.lower() in weak_admin_passwords):
+                    logger.warning(
+                        "DEFAULT_ADMIN_PASSWORD is weak; ignoring it and generating a "
+                        "strong random password instead. Unset it or use >=12 strong chars."
+                    )
+                    admin_password = None
                 if not admin_password:
                     admin_password = secrets.token_urlsafe(12)
                     logger.warning("\n" + "=" * 50)
