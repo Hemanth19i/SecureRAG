@@ -229,6 +229,29 @@ A ready-to-run demo lives in [`demo/`](demo/) (sample logs + step-by-step script
 
 ---
 
+## Testing
+
+Backend tests live in `server/tests/` (pytest). They run **offline** — the
+embedding model and Gemini are stubbed/mocked, and tests use temporary SQLite +
+Chroma stores, so your real `securerag.db` / `chroma_store` are never touched.
+
+```bash
+cd server
+pip install -r requirements-dev.txt
+
+pytest                 # unit + contract + API tests (integration excluded by default)
+ruff check .           # lint (fails on real errors: syntax / undefined names)
+pytest -m integration  # opt-in end-to-end: REAL embedder + Chroma + /query
+                       # (downloads all-MiniLM-L6-v2 on first run)
+```
+
+From the repo root: `make test`, `make lint`, `make test-integration`.
+
+- The **contract test** (`tests/test_contract_query.py`) locks the `/query`
+  response shape — documented in [`server/tests/CONTRACT.md`](server/tests/CONTRACT.md).
+- **CI** (`.github/workflows/ci.yml`) runs ruff + pytest (excluding integration)
+  on every push and PR (Python 3.11), with pip caching.
+
 ## Security Notes
 
 - Secrets live only in `server/.env` (gitignored). Never commit real keys.

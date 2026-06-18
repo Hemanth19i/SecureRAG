@@ -1,0 +1,7 @@
+# Lint for real errors (syntax, undefined names) without failing on pre-existing
+# style, so CI stays green on the current codebase while still catching bugs.
+extend-exclude = ["venv"]
+line-length = 120
+
+[lint]
+select = ["E9", "F63", "F7", "F82"]

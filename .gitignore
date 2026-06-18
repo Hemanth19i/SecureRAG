@@ -14,3 +14,8 @@ chroma_store/
 
 # Secrets
 .env
+
+# Test / coverage artifacts
+.coverage
+.pytest_cache/
+htmlcov/
