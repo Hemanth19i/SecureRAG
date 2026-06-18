@@ -15,6 +15,7 @@ from intelligence.correlator import correlate_iocs, get_correlation_summary, gen
 from intelligence.attack_graph import build_attack_graph
 from intelligence.threat_intel import get_enrichment
 from intelligence.alerts import build_alerts
+from intelligence.ingest import ingest_text
 
 logger = logging.getLogger(__name__)
 
@@ -68,95 +69,20 @@ def upload_log():
                 "upload_id": existing_upload_id
             }), 409
 
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Delegate the full pipeline (chunk -> embed -> Chroma -> SQLite ->
+        # correlate -> alerts) to the reusable ingestion service. file_hash is
+        # passed through so it isn't recomputed.
+        result = ingest_text(
+            text, file.filename,
+            sqlite_store=current_app.sqlite_store,
+            vector_store=current_app.vector_store,
+            embedder=embedder,
+            file_hash=file_hash,
+        )
+        if result["status"] == "error":
+            return jsonify({"error": result["message"]}), 500
 
-        # We need an upload ID for the DB
-        upload_id = str(uuid.uuid4())
-
-        metadata = {
-            "filename": file.filename,
-            "source_file": file.filename,
-            "timestamp": now,
-            "upload_id": upload_id
-        }
-
-
-# Parse & chunk first (no DB writes yet)
-        chunks = chunk_text(text)
-        if not chunks:
-            return jsonify({"error": "Failed to chunk text"}), 500
-
-        embeddings = embedder.embed_chunks(chunks)
-        if not embeddings:
-            return jsonify({"error": "Failed to generate embeddings"}), 500
-
-        chunk_metadatas = []
-        chunk_ids = []
-        for i, chunk_text_content in enumerate(chunks):
-            meta = metadata.copy()
-            meta['chunk_index'] = i
-            chunk_id = f"chunk_{upload_id}_{i}"
-            meta['chunk_id'] = chunk_id
-            chunk_ids.append(chunk_id)
-            clean_meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
-            chunk_metadatas.append(clean_meta)
-
-        # Write to ChromaDB FIRST. If this fails, nothing else is written
-        # so a retry won't create duplicate/orphaned SQLite rows.
-        success = current_app.vector_store.store_embeddings(chunks, embeddings, chunk_metadatas, ids=chunk_ids)
-        if not success:
-            return jsonify({"error": "Failed to store in ChromaDB"}), 500
-
-        # ChromaDB write succeeded — now populate the SQLite analysis tables.
-        # All writes for this upload run in a single transaction: if any row
-        # fails, the whole upload is rolled back rather than left half-ingested.
-        sqlite = current_app.sqlite_store
-        agg_mitre = []
-        agg_timeline = []
-        with sqlite.transaction() as conn:
-            for i, chunk_text_content in enumerate(chunks):
-                chunk_id = chunk_ids[i]
-
-                # 1. Store raw chunk
-                sqlite.store_log_chunk(chunk_id, upload_id, file.filename, chunk_text_content, conn=conn)
-
-                # 2. Extract and store IOCs
-                chunk_iocs = extract_iocs(chunk_text_content)
-                for ioc_type, ioc_list in chunk_iocs.items():
-                    if ioc_type == "error": continue
-                    for ioc_val in ioc_list:
-                        TYPE_MAP = {"ips": "ip", "hashes": "hash", "cves": "cve", "domains": "domain", "emails": "email", "ipv6": "ipv6", "urls": "url"}
-                        single_type = TYPE_MAP.get(ioc_type, ioc_type)
-                        sqlite.store_ioc(ioc_val, single_type, chunk_id, conn=conn)
-
-                # 3. MITRE mapping
-                mitre_matches = map_to_mitre(chunk_text_content)
-                agg_mitre.extend(mitre_matches)
-                for match in mitre_matches:
-                    sqlite.store_mitre_mapping(chunk_id, match["technique"], match["tactic"], match.get("confidence", "UNKNOWN"), conn=conn)
-
-                # 4. Timeline generation — same pipeline as /query and /timeline
-                timeline_events = generate_timeline(chunk_text_content, mitre_matches)
-                agg_timeline.extend(timeline_events)
-                for ev in timeline_events:
-                    sqlite.store_timeline_event(chunk_id, ev["timestamp"], ev["description"], ev["severity"], conn=conn)
-
-            sqlite.store_file_upload(file_hash, upload_id, file.filename, conn=conn)
-
-        # Compute global correlation across all ingested logs (reads committed data)
-        all_iocs = sqlite.get_all_extracted_iocs()
-        global_correlations = correlate_iocs(all_iocs, sqlite)
-        sqlite.store_global_correlation(global_correlations)
-
-        # Generate real-time alerts from this upload's existing analysis outputs.
-        alerts = build_alerts(agg_timeline, agg_mitre, global_correlations,
-                              source=file.filename, upload_id=upload_id)
-        if alerts:
-            with sqlite.transaction() as conn:
-                for a in alerts:
-                    sqlite.store_alert(a, conn=conn)
-
-        return jsonify({"message": "File uploaded successfully", "chunks_stored": len(chunks)}), 200
+        return jsonify({"message": "File uploaded successfully", "chunks_stored": result["chunks_stored"]}), 200
 
     except Exception as e:
         traceback.print_exc()
