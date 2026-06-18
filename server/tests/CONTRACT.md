@@ -64,10 +64,22 @@ breaking API change and must be intentional.
     "summary": "string"
   },
 
+  // Additive (new) key: source-grounding for the answer — the retrieved chunks
+  // that supported it. score = semantic similarity (1/(1+distance)) or null
+  // (e.g. when hybrid retrieval is enabled and no distance is available).
+  "citations": [
+    { "chunk_id": "chunk_<upload>_<i>", "source_file": "ssh.log",
+      "snippet": "first ~200 chars of the chunk", "score": 0.81 }
+  ],
+
   "chunks_used": 0,
   "query": "string"
 }
 ```
+
+## Additive keys
+- `citations[]` (added in the RAG upgrade) — new key only; all keys above are
+  unchanged. Each entry: `chunk_id`, `source_file`, `snippet`, `score`.
 
 ## Empty states
 - When the analyzed text has **no parseable timestamps**, `timeline.events` is

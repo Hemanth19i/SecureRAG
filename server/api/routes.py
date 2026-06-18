@@ -63,6 +63,23 @@ def _maybe_hybrid(query_text, query_embedding, top_k, semantic_chunks):
         logger.warning("Hybrid retrieval failed (%s); using semantic results.", e)
         return semantic_chunks
 
+
+def _build_citations(chunks):
+    """Source-grounding for the answer: the retrieved chunks that supported it.
+    Additive provenance for /query. score is the semantic similarity when a
+    distance is available (1/(1+distance)), else null (e.g. hybrid path)."""
+    citations = []
+    for c in chunks:
+        meta = c.get("metadata") or {}
+        dist = c.get("distance")
+        citations.append({
+            "chunk_id": meta.get("chunk_id"),
+            "source_file": meta.get("source_file") or meta.get("filename"),
+            "snippet": (c.get("document") or "")[:200],
+            "score": round(1.0 / (1.0 + dist), 4) if isinstance(dist, (int, float)) else None,
+        })
+    return citations
+
 @api_bp.route('/debug/chunks', methods=['GET'])
 @jwt_required()
 def debug_chunks():
@@ -343,6 +360,7 @@ def query_system():
             },
             "mitre": mitre,
             "timeline": timeline,
+            "citations": _build_citations(chunks),
             "chunks_used": len(chunk_texts),
             "query": query_text
         }), 200

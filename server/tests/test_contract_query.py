@@ -39,7 +39,7 @@ def _call_query(client, app, monkeypatch, sample_log, token):
         "query_similar",
         lambda emb, top_k=5: {
             "documents": [[sample_log]],
-            "metadatas": [[{"source_file": "sample.log", "upload_id": "u1"}]],
+            "metadatas": [[{"source_file": "sample.log", "upload_id": "u1", "chunk_id": "chunk_u1_0"}]],
             "distances": [[0.12]],
         },
     )
@@ -69,9 +69,9 @@ def test_query_contract(client, app, monkeypatch, sample_log, admin_token):
     assert resp.status_code == 200
     body = resp.get_json()
 
-    # --- top-level keys ---
+    # --- top-level keys (incl. additive citations) ---
     for key in ("status", "analysis", "iocs", "correlation", "mitre", "timeline",
-                "chunks_used", "query"):
+                "citations", "chunks_used", "query"):
         assert key in body, f"missing top-level key: {key}"
     assert body["status"] == "success"
     assert isinstance(body["chunks_used"], int)
@@ -127,6 +127,31 @@ def test_query_contract(client, app, monkeypatch, sample_log, admin_token):
             assert key in ev, f"missing timeline.events[].{key}"
     dated = [e["timestamp"] for e in tl["events"] if e["timestamp"] != "T+unknown"]
     assert dated == sorted(dated), "timeline events must be chronologically ordered"
+
+    # --- citations (additive key): source-grounding for the answer ---
+    citations = body["citations"]
+    assert isinstance(citations, list) and citations
+    for cit in citations:
+        for key in ("chunk_id", "source_file", "snippet", "score"):
+            assert key in cit, f"missing citations[].{key}"
+    assert citations[0]["chunk_id"] == "chunk_u1_0"
+    assert citations[0]["source_file"] == "sample.log"
+    assert citations[0]["score"] == round(1.0 / 1.12, 4)
+
+
+def test_build_citations_shapes_chunks():
+    from api.routes import _build_citations
+    chunks = [
+        {"document": "x" * 300, "metadata": {"chunk_id": "c1", "source_file": "a.log"}, "distance": 0.0},
+        {"document": "y", "metadata": {"filename": "b.log"}, "distance": None},
+    ]
+    cits = _build_citations(chunks)
+    assert cits[0]["chunk_id"] == "c1"
+    assert cits[0]["source_file"] == "a.log"
+    assert len(cits[0]["snippet"]) == 200          # snippet truncated to ~200 chars
+    assert cits[0]["score"] == 1.0                 # 1/(1+0)
+    assert cits[1]["source_file"] == "b.log"       # falls back to filename
+    assert cits[1]["score"] is None                # no distance -> null score
 
 
 def test_query_requires_auth(client):
