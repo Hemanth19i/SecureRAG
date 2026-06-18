@@ -86,7 +86,7 @@ def upload_log():
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/monitor/feed', methods=['POST'])
 @jwt_required()
@@ -134,7 +134,7 @@ def monitor_feed():
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/correlate', methods=['POST'])
 @jwt_required()
@@ -157,7 +157,7 @@ def correlate_endpoint():
         }), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/mitre-map', methods=['POST'])
 @jwt_required()
@@ -181,7 +181,7 @@ def mitre_map():
         }), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/timeline', methods=['POST'])
 @jwt_required()
@@ -206,7 +206,7 @@ def timeline_endpoint():
         }), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/query', methods=['POST'])
 @jwt_required()
@@ -291,7 +291,7 @@ def query_system():
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 @api_bp.route('/stats', methods=['GET'])
 @jwt_required()
 def stats_endpoint():
@@ -306,7 +306,7 @@ def stats_endpoint():
         }), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/attack-graph', methods=['GET'])
 @jwt_required()
@@ -326,7 +326,7 @@ def attack_graph_endpoint():
         return jsonify(graph), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/report', methods=['POST'])
 @jwt_required()
@@ -343,7 +343,7 @@ def report_endpoint():
         return jsonify({"report": report_text}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/cases', methods=['POST'])
 @jwt_required()
@@ -380,7 +380,7 @@ def create_case_endpoint():
         return jsonify({"case": sqlite.get_case(case_id)}), 201
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/cases', methods=['GET'])
 @jwt_required()
@@ -398,7 +398,7 @@ def list_cases_endpoint():
         return jsonify({"cases": cases, "total": len(cases)}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/cases/<case_id>', methods=['GET'])
 @jwt_required()
@@ -413,7 +413,7 @@ def get_case_endpoint(case_id):
         return jsonify(case), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/cases/<case_id>', methods=['PATCH'])
 @jwt_required()
@@ -459,7 +459,7 @@ def update_case_endpoint(case_id):
         return jsonify({"case": sqlite.get_case(case_id)}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/cases/<case_id>/notes', methods=['POST'])
 @jwt_required()
@@ -484,7 +484,7 @@ def add_case_note_endpoint(case_id):
         return jsonify({"notes": sqlite.get_case_notes(case_id)}), 201
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/cases/<case_id>/notes', methods=['GET'])
 @jwt_required()
@@ -497,7 +497,7 @@ def list_case_notes_endpoint(case_id):
         return jsonify({"notes": notes, "total": len(notes)}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/enrich', methods=['GET'])
 @jwt_required()
@@ -516,7 +516,7 @@ def enrich_endpoint():
         return jsonify(result), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/alerts', methods=['GET'])
 @jwt_required()
@@ -540,7 +540,7 @@ def list_alerts_endpoint():
         return jsonify({"alerts": alerts, "total": len(alerts), "cursor": cursor}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @api_bp.route('/alerts/<int:alert_id>', methods=['PATCH'])
 @jwt_required()
@@ -565,4 +565,4 @@ def update_alert_endpoint(alert_id):
         return jsonify({"alert_id": alert_id, "acknowledged": True}), 200
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
