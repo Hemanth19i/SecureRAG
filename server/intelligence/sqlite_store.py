@@ -179,6 +179,51 @@ class SQLiteStore:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_case ON case_notes(case_id)")
 
+            # 10b. Case Audit Trail (append-only). The forensic spine of a case:
+            # every create/note/status_change/assignment/evidence_linked event is
+            # recorded with author + timestamp. Hard immutability is enforced by
+            # the triggers below (UPDATE/DELETE raise), not just by convention.
+            # No ON DELETE CASCADE: the trail is permanent even if a case row is
+            # removed (and there is no case-delete path).
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS case_audit (
+                audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                case_id TEXT NOT NULL,
+                author TEXT NOT NULL,
+                entry_type TEXT NOT NULL,
+                content TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (case_id) REFERENCES cases(case_id)
+            )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_case ON case_audit(case_id)")
+            cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS case_audit_no_update
+            BEFORE UPDATE ON case_audit
+            BEGIN SELECT RAISE(ABORT, 'case_audit is append-only'); END
+            """)
+            cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS case_audit_no_delete
+            BEFORE DELETE ON case_audit
+            BEGIN SELECT RAISE(ABORT, 'case_audit is append-only'); END
+            """)
+
+            # 10c. Case Evidence (append-only forensic snapshots). Stores an
+            # immutable copy of linked intelligence (snapshot of a /query result,
+            # or a specific IOC/technique/event reference) captured at link time.
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS case_evidence (
+                evidence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                case_id TEXT NOT NULL,
+                evidence_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                linked_by TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (case_id) REFERENCES cases(case_id) ON DELETE CASCADE
+            )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_evidence_case ON case_evidence(case_id)")
+
             # 11. IOC Enrichment cache (Threat Intelligence). enrichment_data
             # holds the provider JSON; expires_at drives TTL + negative caching.
             # Independent of global_correlations (which is wiped per upload).
@@ -800,6 +845,104 @@ class SQLiteStore:
             return [dict(r) for r in rows]
         except Exception as e:
             logger.error("Error getting case notes: %s", e)
+            return []
+
+    # --- Case audit trail (append-only) -----------------------------------
+
+    def add_case_audit(self, case_id, author, entry_type, content=None, conn=None):
+        """Append one immutable audit entry. content may be a string (e.g. a
+        note) or a JSON-serialisable object (e.g. {"field","from","to"} for a
+        status_change); objects are stored as json.dumps(). There is
+        deliberately NO update/delete counterpart — the table is append-only and
+        DB triggers reject mutation. Honours the conn= transaction convention."""
+        import json
+        managed = conn is None
+        own_conn = None
+        try:
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            stored = content if isinstance(content, str) or content is None else json.dumps(content)
+            conn.execute("""
+            INSERT INTO case_audit (case_id, author, entry_type, content)
+            VALUES (?, ?, ?, ?)
+            """, (case_id, author, entry_type, stored))
+            if managed:
+                conn.commit()
+        except Exception as e:
+            logger.error("Error adding case audit entry: %s", e)
+            if not managed:
+                raise
+        finally:
+            if own_conn is not None:
+                own_conn.close()
+
+    def get_case_audit(self, case_id):
+        """Return a case's full audit trail, oldest first (chronological).
+        content is returned as stored; typed events carry a JSON string."""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT audit_id, case_id, author, entry_type, content, created_at "
+                "FROM case_audit WHERE case_id = ? ORDER BY audit_id ASC",
+                (case_id,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error("Error getting case audit: %s", e)
+            return []
+
+    # --- Case evidence (append-only snapshots) ----------------------------
+
+    def add_case_evidence(self, case_id, evidence_type, payload, linked_by, conn=None):
+        """Append an immutable evidence snapshot. payload (any JSON-serialisable
+        object) is stored as json.dumps() in payload_json."""
+        import json
+        managed = conn is None
+        own_conn = None
+        try:
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            conn.execute("""
+            INSERT INTO case_evidence (case_id, evidence_type, payload_json, linked_by)
+            VALUES (?, ?, ?, ?)
+            """, (case_id, evidence_type, json.dumps(payload), linked_by))
+            if managed:
+                conn.commit()
+        except Exception as e:
+            logger.error("Error adding case evidence: %s", e)
+            if not managed:
+                raise
+        finally:
+            if own_conn is not None:
+                own_conn.close()
+
+    def get_case_evidence(self, case_id):
+        """Return a case's linked evidence, oldest first, with payload parsed."""
+        import json
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT evidence_id, case_id, evidence_type, payload_json, linked_by, created_at "
+                "FROM case_evidence WHERE case_id = ? ORDER BY evidence_id ASC",
+                (case_id,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            out = []
+            for r in rows:
+                rec = dict(r)
+                raw = rec.pop("payload_json", None)
+                rec["payload"] = json.loads(raw) if raw else None
+                out.append(rec)
+            return out
+        except Exception as e:
+            logger.error("Error getting case evidence: %s", e)
             return []
 
     # --- Threat Intelligence enrichment cache -----------------------------

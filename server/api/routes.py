@@ -469,6 +469,12 @@ def create_case_endpoint():
                 severity=severity, summary=summary, query=query,
                 snapshot=snapshot, assigned_to=assigned_to, conn=conn,
             )
+            # Open the audit trail with the creation event (same transaction).
+            sqlite.add_case_audit(case_id, created_by, "created",
+                                  {"title": title, "severity": severity}, conn=conn)
+            if assigned_to:
+                sqlite.add_case_audit(case_id, created_by, "assignment",
+                                      {"field": "assigned_to", "from": None, "to": assigned_to}, conn=conn)
 
         return jsonify({"case": sqlite.get_case(case_id)}), 201
     except Exception as e:
@@ -500,9 +506,13 @@ def get_case_endpoint(case_id):
     if claims.get("role") not in ["ADMIN", "ANALYST"]:
         return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
     try:
-        case = current_app.sqlite_store.get_case(case_id)
+        sqlite = current_app.sqlite_store
+        case = sqlite.get_case(case_id)
         if case is None:
             return jsonify({"error": "Case not found"}), 404
+        # Full investigation view: case fields + linked evidence + audit trail.
+        case["evidence"] = sqlite.get_case_evidence(case_id)
+        case["audit"] = sqlite.get_case_audit(case_id)
         return jsonify(case), 200
     except Exception as e:
         traceback.print_exc()
@@ -512,18 +522,27 @@ def get_case_endpoint(case_id):
 @jwt_required()
 def update_case_endpoint(case_id):
     claims = get_jwt()
-    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+    role = claims.get("role")
+    if role not in ["ADMIN", "ANALYST"]:
         return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
     try:
         data = request.json or {}
-        ALLOWED_STATUS = {"OPEN", "IN_PROGRESS", "CLOSED"}
+        ALLOWED_STATUS = {"OPEN", "IN_PROGRESS", "CONTAINED", "CLOSED"}
         ALLOWED_SEVERITY = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
+
+        sqlite = current_app.sqlite_store
+        existing = sqlite.get_case(case_id)
+        if existing is None:
+            return jsonify({"error": "Case not found"}), 404
 
         updates = {}
         if "status" in data:
             status = str(data["status"]).upper()
             if status not in ALLOWED_STATUS:
-                return jsonify({"error": "Invalid status. Use OPEN, IN_PROGRESS or CLOSED"}), 400
+                return jsonify({"error": "Invalid status. Use OPEN, IN_PROGRESS, CONTAINED or CLOSED"}), 400
+            # Closing a case is an ADMIN-only action.
+            if status == "CLOSED" and role != "ADMIN":
+                return jsonify({"error": "Only ADMIN can close a case"}), 403
             updates["status"] = status
         if "severity" in data:
             severity = str(data["severity"]).upper()
@@ -536,18 +555,27 @@ def update_case_endpoint(case_id):
                 return jsonify({"error": "Title cannot be empty"}), 400
             updates["title"] = title
         if "assigned_to" in data:
-            # Empty/null clears the assignee (stored as ""); a string assigns it.
+            # Reassignment is an ADMIN-only action.
+            if role != "ADMIN":
+                return jsonify({"error": "Only ADMIN can reassign a case"}), 403
             updates["assigned_to"] = (data.get("assigned_to") or "")
 
         if not updates:
             return jsonify({"error": "No updatable fields provided"}), 400
 
-        sqlite = current_app.sqlite_store
+        actor = get_jwt_identity()
         with sqlite.transaction() as conn:
-            affected = sqlite.update_case(case_id, conn=conn, **updates)
-
-        if affected == 0:
-            return jsonify({"error": "Case not found"}), 404
+            sqlite.update_case(case_id, conn=conn, **updates)
+            # Write one immutable audit entry per field that actually changed.
+            for field, new_val in updates.items():
+                old_val = existing.get(field)
+                if (old_val or "") == (new_val or ""):
+                    continue
+                entry_type = "assignment" if field == "assigned_to" else "status_change"
+                sqlite.add_case_audit(
+                    case_id, actor, entry_type,
+                    {"field": field, "from": old_val, "to": new_val}, conn=conn,
+                )
 
         return jsonify({"case": sqlite.get_case(case_id)}), 200
     except Exception as e:
@@ -573,8 +601,44 @@ def add_case_note_endpoint(case_id):
         author = get_jwt_identity()
         with sqlite.transaction() as conn:
             sqlite.add_case_note(case_id, author, body, conn=conn)
+            # A note is also an audit-trail event (same transaction).
+            sqlite.add_case_audit(case_id, author, "note", body, conn=conn)
 
         return jsonify({"notes": sqlite.get_case_notes(case_id)}), 201
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": "Internal server error"}), 500
+
+@api_bp.route('/cases/<case_id>/link-evidence', methods=['POST'])
+@jwt_required()
+def link_case_evidence_endpoint(case_id):
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        data = request.json or {}
+        sqlite = current_app.sqlite_store
+        if sqlite.get_case(case_id) is None:
+            return jsonify({"error": "Case not found"}), 404
+
+        # Accept either a /query result to snapshot, or an explicit
+        # {evidence_type, payload} (e.g. specific IOC/technique/event references).
+        if data.get("snapshot"):
+            evidence_type = "snapshot"
+            payload = data["snapshot"]
+        elif data.get("evidence_type") and "payload" in data:
+            evidence_type = str(data["evidence_type"])
+            payload = data["payload"]
+        else:
+            return jsonify({"error": "Provide 'snapshot' or 'evidence_type' + 'payload'"}), 400
+
+        linked_by = get_jwt_identity()
+        with sqlite.transaction() as conn:
+            sqlite.add_case_evidence(case_id, evidence_type, payload, linked_by, conn=conn)
+            sqlite.add_case_audit(case_id, linked_by, "evidence_linked",
+                                  {"evidence_type": evidence_type}, conn=conn)
+
+        return jsonify({"evidence": sqlite.get_case_evidence(case_id)}), 201
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": "Internal server error"}), 500
