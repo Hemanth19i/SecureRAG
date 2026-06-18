@@ -1,3 +1,4 @@
+import os
 import uuid
 import logging
 import traceback
@@ -21,6 +22,13 @@ logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__)
 embedder = Embedder()
+
+# Request validation limits (override via env). Bound payloads to protect the
+# embedding/ingestion pipeline and the vector store from oversized input.
+MAX_QUERY_CHARS = int(os.getenv("MAX_QUERY_CHARS", "10000"))
+MAX_TOP_K = int(os.getenv("MAX_TOP_K", "50"))
+MAX_FEED_CHARS = int(os.getenv("MAX_FEED_CHARS", "1000000"))
+MAX_SOURCE_CHARS = int(os.getenv("MAX_SOURCE_CHARS", "200"))
 
 @api_bp.route('/debug/chunks', methods=['GET'])
 @jwt_required()
@@ -105,8 +113,13 @@ def monitor_feed():
         content = data.get("content")
         if not source:
             return jsonify({"error": "source is required"}), 400
+        if len(source) > MAX_SOURCE_CHARS:
+            return jsonify({"error": "source exceeds %d characters" % MAX_SOURCE_CHARS}), 400
         if not content or not str(content).strip():
             return jsonify({"error": "content is required"}), 400
+        content = str(content)
+        if len(content) > MAX_FEED_CHARS:
+            return jsonify({"error": "content exceeds %d characters" % MAX_FEED_CHARS}), 400
 
         # Unique per-batch fingerprint: no dedup for live feeds, but the
         # file_uploads PK must stay unique even when content repeats.
@@ -220,7 +233,16 @@ def query_system():
             return jsonify({"error": "No query provided"}), 400
 
         query_text = data['query']
-        top_k = data.get('top_k', 5)
+        if not isinstance(query_text, str) or not query_text.strip():
+            return jsonify({"error": "query must be a non-empty string"}), 400
+        if len(query_text) > MAX_QUERY_CHARS:
+            return jsonify({"error": "query exceeds %d characters" % MAX_QUERY_CHARS}), 400
+
+        try:
+            top_k = int(data.get('top_k', 5))
+        except (TypeError, ValueError):
+            return jsonify({"error": "top_k must be an integer"}), 400
+        top_k = max(1, min(top_k, MAX_TOP_K))
 
         query_embedding = embedder.embed_query(query_text)
         if not query_embedding:
