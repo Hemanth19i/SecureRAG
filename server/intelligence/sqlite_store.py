@@ -17,10 +17,16 @@ class SQLiteStore:
         self._init_db()
 
     def get_connection(self):
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # busy handling: `timeout` is the Python-driver wait for a locked DB;
+        # PRAGMA busy_timeout enforces the same at the SQLite level. Both guard
+        # against "database is locked" under concurrent writers (e.g. /upload
+        # and /monitor/feed) instead of failing immediately.
+        timeout_s = float(os.getenv("SQLITE_TIMEOUT_SECONDS", "30"))
+        conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=timeout_s)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=%d" % int(timeout_s * 1000))
         conn.row_factory = sqlite3.Row
         return conn
 
