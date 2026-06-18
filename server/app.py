@@ -24,7 +24,10 @@ from intelligence.sqlite_store import SQLiteStore
 
 def create_app():
     app = Flask(__name__)
-    CORS(app, resources={r"/*": {"origins": os.getenv("CORS_ORIGINS", "http://localhost:5173")}})
+    # Allow a comma-separated list of front-end origins (e.g. the deployed app
+    # plus localhost during dev). Each must match scheme/host/port exactly.
+    cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
+    CORS(app, resources={r"/*": {"origins": cors_origins}})
 
     # Configure JWT. Fail closed: refuse to start without a STRONG secret rather
     # than running with a missing, short, or placeholder (guessable) key.
