@@ -1,0 +1,10 @@
+2026-06-15 02:11:03 sshd[2041]: Failed password for admin from 203.0.113.45 port 51812 ssh2
+2026-06-15 02:11:05 sshd[2041]: Failed password for admin from 203.0.113.45 port 51813 ssh2
+2026-06-15 02:11:07 sshd[2041]: Failed password for admin from 203.0.113.45 port 51814 ssh2
+2026-06-15 02:11:09 sshd[2041]: Failed password for root from 203.0.113.45 port 51815 ssh2
+2026-06-15 02:11:11 sshd[2041]: Failed password for root from 203.0.113.45 port 51816 ssh2
+2026-06-15 02:11:14 sshd[2041]: Failed password for admin from 203.0.113.45 port 51817 ssh2
+2026-06-15 02:11:20 sshd[2041]: Accepted password for admin from 203.0.113.45 port 51820 ssh2
+2026-06-15 02:11:21 sshd[2041]: pam_unix(sshd:session): session opened for user admin by (uid=0)
+2026-06-15 02:12:02 sudo: admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/bash
+2026-06-15 02:13:40 audit: new local user 'svc_backup' created by uid=0
