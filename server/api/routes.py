@@ -31,6 +31,38 @@ MAX_TOP_K = int(os.getenv("MAX_TOP_K", "50"))
 MAX_FEED_CHARS = int(os.getenv("MAX_FEED_CHARS", "1000000"))
 MAX_SOURCE_CHARS = int(os.getenv("MAX_SOURCE_CHARS", "200"))
 
+
+def _maybe_hybrid(query_text, query_embedding, top_k, semantic_chunks):
+    """Optionally re-rank retrieval with BM25+RRF (+ cross-encoder), env-gated by
+    RAG_HYBRID / RAG_RERANK. Returns semantic_chunks unchanged when both flags are
+    off (the default), so the baseline path and offline tests are unaffected and
+    nothing heavy is imported. Falls back to semantic on any error."""
+    truthy = ("1", "true", "yes")
+    hybrid_on = os.getenv("RAG_HYBRID", "false").lower() in truthy
+    rerank_on = os.getenv("RAG_RERANK", "false").lower() in truthy
+    if not hybrid_on and not rerank_on:
+        return semantic_chunks
+    try:
+        from rag.retriever import hybrid_rank
+        store = current_app.vector_store
+        allc = store.get_all_chunks() or {}
+        ids = allc.get("ids") or []
+        docs = allc.get("documents") or []
+        metas = allc.get("metadatas") or []
+        if not ids:
+            return semantic_chunks
+        text_by_id = dict(zip(ids, docs))
+        meta_by_id = {i: (m or {}) for i, m in zip(ids, metas)}
+        sem = store.query_similar(query_embedding, top_k=min(len(ids), 200))
+        sem_ids = (sem.get("ids") or [[]])[0]
+        ranked = hybrid_rank(query_text, ids, text_by_id, sem_ids, use_rerank=rerank_on)
+        return [{"document": text_by_id.get(cid, ""),
+                 "metadata": meta_by_id.get(cid, {}),
+                 "distance": None} for cid in ranked[:top_k]]
+    except Exception as e:
+        logger.warning("Hybrid retrieval failed (%s); using semantic results.", e)
+        return semantic_chunks
+
 @api_bp.route('/debug/chunks', methods=['GET'])
 @jwt_required()
 def debug_chunks():
@@ -261,6 +293,9 @@ def query_system():
                     "metadata": results['metadatas'][0][i] if results.get('metadatas') else {},
                     "distance": results['distances'][0][i] if results.get('distances') else 0.0
                 })
+
+        # Optional hybrid retrieval + rerank (env-gated; no-op by default).
+        chunks = _maybe_hybrid(query_text, query_embedding, top_k, chunks)
 
         chunk_texts = [c["document"] for c in chunks]
         logger.debug("=== RETRIEVED CHUNKS === count=%s", len(chunk_texts))

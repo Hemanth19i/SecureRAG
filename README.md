@@ -260,25 +260,36 @@ a query is a hit at rank *r* iff the retrieved chunk id at *r* is the labeled
 target. Metrics are computed over the **real** stack (SentenceTransformer
 `all-MiniLM-L6-v2` + ChromaDB).
 
+Retrieval has three configurations, toggled by env flags (default = semantic):
+
 ```bash
 cd server
-python eval/recall_eval.py            # semantic baseline
+python eval/recall_eval.py                 # semantic baseline
+python eval/recall_eval.py --mode hybrid   # semantic + BM25 fused via RRF
+python eval/recall_eval.py --mode rerank   # hybrid + cross-encoder rerank
 ```
+At runtime, `RAG_HYBRID=true` and/or `RAG_RERANK=true` enable hybrid/rerank on
+`/query` (both default off; the reranker model loads lazily and is never pulled
+in CI).
 
-**Results — semantic (baseline):**
+**Results (corpus = 30, queries = 10):**
 
-| Metric | Semantic |
-|---|---|
-| Recall@1 | 0.80 |
-| Recall@3 | 1.00 |
-| Recall@5 | 1.00 |
-| MRR | 0.90 |
+| Metric | Semantic | Hybrid (BM25+RRF) | Hybrid + Rerank |
+|---|---|---|---|
+| Recall@1 | 0.80 | 0.80 | **0.90** |
+| Recall@3 | 1.00 | 1.00 | 1.00 |
+| Recall@5 | 1.00 | 1.00 | 1.00 |
+| MRR | 0.90 | 0.90 | **0.95** |
 
-*Methodology:* corpus = 30 entries, queries = 10, K ∈ {1, 3, 5}, relevance =
-exact id match, measured on the real embedding + vector-store path. Recall@3/@5
-saturate on a 30-entry corpus, so **Recall@1 and MRR are the discriminating
-metrics**. Hybrid-retrieval + reranking comparison is added in the section update
-once those land.
+*Honest read:* on this set, **BM25+RRF fusion alone changed nothing** — the
+keyword signal didn't outrank the embeddings for the two top-1 misses. The
+**cross-encoder reranker** is what helped, lifting Recall@1 0.80→0.90 and MRR
+0.90→0.95 by fixing one of those misses. Recall@3/@5 are saturated at this corpus
+size, so Recall@1 and MRR are the meaningful signals.
+
+*Methodology:* relevance = exact chunk-id match against the labeled target,
+measured on the real embedding + vector-store path; reranker =
+`cross-encoder/ms-marco-MiniLM-L-6-v2` (CPU). Reproduce with the commands above.
 
 ## Security Notes
 
