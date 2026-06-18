@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+.env
+*.db
+*.db-*
+*.sqlite3
+chroma_store/
+_rc2_*.py
+scripts/__pycache__/
+.code-review-graph/

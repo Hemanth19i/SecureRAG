@@ -1,0 +1,34 @@
+# SecureRAG - production-style local deployment.
+# Requires server/.env (copy from server/.env.example and set JWT_SECRET_KEY).
+services:
+  backend:
+    build: ./server
+    working_dir: /data
+    command: python /app/run_production.py
+    environment:
+      PYTHONPATH: /app
+      HOST: 0.0.0.0
+      FLASK_PORT: "5000"
+      CHROMA_DB_PATH: /data/chroma_store
+      CORS_ORIGINS: http://localhost:5173
+    env_file:
+      - ./server/.env
+    volumes:
+      - securerag-data:/data
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:5000
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  securerag-data:
