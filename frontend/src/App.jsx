@@ -200,6 +200,17 @@ async function fetchAlerts(token, since = 0) {
   return apiFetch(`/alerts?since=${encodeURIComponent(since)}`, { token, method: "GET" });
 }
 
+// Acknowledge one alert. PATCH is idempotent server-side (re-acking is a no-op,
+// a missing id 404s). The forward-only poll never re-fetches an acked alert, so
+// the UI mutates optimistically and only reconciles on failure.
+async function ackAlert(token, alertId) {
+  return apiFetch(`/alerts/${encodeURIComponent(alertId)}`, {
+    token,
+    method: "PATCH",
+    body: { acknowledged: true },
+  });
+}
+
 async function fetchReport(token, analysis) {
   const data = await apiFetch("/report", { token, method: "POST", body: { analysis } });
   return data.report;
@@ -823,6 +834,17 @@ function AlertStream({ token, onLogout }) {
 
   usePoll(poll, 10000, !!token);
 
+  const ack = useCallback((id) => {
+    // Optimistic: flip locally now. The cursor poll only prepends newer ids and
+    // never re-sends this one, so we reconcile against the server only on error.
+    setAlerts((prev) => prev.map((a) => (a.alert_id === id ? { ...a, acknowledged: true } : a)));
+    ackAlert(token, id).catch((e) => {
+      if (e.status === 401) { onLogout?.(); return; }
+      // Revert so the unacked count stays truthful.
+      setAlerts((prev) => prev.map((a) => (a.alert_id === id ? { ...a, acknowledged: false } : a)));
+    });
+  }, [token, onLogout]);
+
   const unacked = alerts.filter((a) => !a.acknowledged).length;
   const statusLabel = status === "ready" ? "LIVE" : status === "error" ? "OFFLINE" : "…";
 
@@ -855,15 +877,21 @@ function AlertStream({ token, onLogout }) {
                 <th>TYPE</th>
                 <th>TITLE</th>
                 <th>TIME</th>
+                <th className="ack-col">ACK</th>
               </tr>
             </thead>
             <tbody>
               {alerts.map((a) => (
-                <tr key={a.alert_id}>
+                <tr key={a.alert_id} className={a.acknowledged ? "ack-row" : undefined}>
                   <td><Sev level={a.severity} /></td>
                   <td className="mono">{a.alert_type}</td>
                   <td className="mono artifact" title={a.title}>{a.title}</td>
                   <td className="mono logged">{a.created_at}</td>
+                  <td className="ack-cell">
+                    {a.acknowledged
+                      ? <span className="mono ack-done">ACK'D</span>
+                      : <button type="button" className="ioc-btn mono ack-btn" onClick={() => ack(a.alert_id)}>ACK</button>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -2849,6 +2877,11 @@ body{ margin:0; background:var(--canvas); }
 .artifact{ color:var(--text); max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .logged{ color:var(--dim); font-size:0.6875rem; white-space:nowrap; }
 .sev{ display:inline-block; font-size:0.5625rem; letter-spacing:0.08em; padding:2px var(--space-2); border:1px solid; border-radius:2px; }
+.ev th.ack-col, .ev td.ack-cell{ text-align:right; white-space:nowrap; width:1%; }
+.ack-btn{ padding:3px var(--space-3); font-size:0.5625rem; }
+.ack-done{ color:var(--dim); font-size:0.5625rem; letter-spacing:0.08em; }
+.ev tbody tr.ack-row{ opacity:0.5; }
+.ev tbody tr.ack-row:hover{ opacity:0.75; }
 
 /* ---- Module rows ---- */
 .modlist{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--space-2); }

@@ -567,3 +567,28 @@ def list_alerts_endpoint():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/alerts/<int:alert_id>', methods=['PATCH'])
+@jwt_required()
+def update_alert_endpoint(alert_id):
+    claims = get_jwt()
+    if claims.get("role") not in ["ADMIN", "ANALYST"]:
+        return jsonify({"error": "Insufficient privileges. Require ADMIN or ANALYST"}), 403
+    try:
+        data = request.json or {}
+        if "acknowledged" not in data:
+            return jsonify({"error": "No updatable fields provided"}), 400
+        if not bool(data.get("acknowledged")):
+            return jsonify({"error": "Only acknowledged=true is supported"}), 400
+
+        sqlite = current_app.sqlite_store
+        with sqlite.transaction() as conn:
+            affected = sqlite.ack_alert(alert_id, conn=conn)
+
+        if affected == 0:
+            return jsonify({"error": "Alert not found"}), 404
+
+        return jsonify({"alert_id": alert_id, "acknowledged": True}), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500

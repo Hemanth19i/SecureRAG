@@ -920,3 +920,30 @@ class SQLiteStore:
         except Exception as e:
             logger.error("Error getting alerts: %s", e)
             return []
+
+    def ack_alert(self, alert_id, conn=None):
+        """Mark one alert acknowledged. Idempotent: re-acking an existing row
+        still matches (rowcount 1); a missing alert_id returns 0 so the API can
+        404. Reuses the existing acknowledged column — no schema change. Honours
+        the conn= convention for transaction() enlistment."""
+        managed = conn is None
+        own_conn = None
+        try:
+            if managed:
+                own_conn = self.get_connection()
+                conn = own_conn
+            cur = conn.execute(
+                "UPDATE alerts SET acknowledged = 1 WHERE alert_id = ?",
+                (alert_id,),
+            )
+            if managed:
+                conn.commit()
+            return cur.rowcount
+        except Exception as e:
+            logger.error("Error acknowledging alert %s: %s", alert_id, e)
+            if not managed:
+                raise
+            return 0
+        finally:
+            if own_conn is not None:
+                own_conn.close()
