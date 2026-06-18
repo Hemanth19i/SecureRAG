@@ -88,6 +88,54 @@ def upload_log():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@api_bp.route('/monitor/feed', methods=['POST'])
+@jwt_required()
+def monitor_feed():
+    """Live ingestion: accept a raw log batch from an agent and run the exact
+    same pipeline as /upload via ingest_text(). Unlike /upload, live feeds are
+    NOT deduplicated (an agent legitimately re-sends similar lines), so each
+    batch gets a unique fingerprint to satisfy the file_uploads PRIMARY KEY
+    without any schema change."""
+    claims = get_jwt()
+    if claims.get("role") != "ADMIN":
+        return jsonify({"error": "Admin privileges required"}), 403
+    try:
+        data = request.json or {}
+        source = str(data.get("source") or "").strip()
+        content = data.get("content")
+        if not source:
+            return jsonify({"error": "source is required"}), 400
+        if not content or not str(content).strip():
+            return jsonify({"error": "content is required"}), 400
+
+        # Unique per-batch fingerprint: no dedup for live feeds, but the
+        # file_uploads PK must stay unique even when content repeats.
+        upload_id = str(uuid.uuid4())
+        feed_hash = hashlib.sha256(
+            ("monitor:%s:%s:%s" % (source, upload_id, content)).encode("utf-8")
+        ).hexdigest()
+
+        result = ingest_text(
+            content, source,
+            sqlite_store=current_app.sqlite_store,
+            vector_store=current_app.vector_store,
+            embedder=embedder,
+            file_hash=feed_hash,
+            upload_id=upload_id,
+        )
+        if result["status"] == "error":
+            return jsonify({"error": result["message"]}), 500
+
+        return jsonify({
+            "upload_id": result["upload_id"],
+            "chunks_stored": result["chunks_stored"],
+            "alerts_created": result["alerts_created"],
+        }), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @api_bp.route('/correlate', methods=['POST'])
 @jwt_required()
 def correlate_endpoint():
