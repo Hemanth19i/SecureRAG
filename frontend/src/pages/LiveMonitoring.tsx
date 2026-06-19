@@ -1,207 +1,128 @@
-import { useEffect, useRef, useState } from 'react'
-import { Activity, Server, Wifi, AlertTriangle, CheckCircle, Clock } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Activity, AlertTriangle, Wifi, Database, Fingerprint, Loader2, Check } from 'lucide-react'
+import { fetchAlerts, ackAlert, fetchStats } from '@/lib/api'
+import type { AlertRow } from '@/lib/backend'
+import { normSeverity, sevHex } from '@/lib/format'
 
-const services = [
-  { name: 'SIEM Ingestion', status: 'healthy', latency: '12ms', throughput: '2.4K eps' },
-  { name: 'EDR Pipeline', status: 'healthy', latency: '8ms', throughput: '1.8K eps' },
-  { name: 'Threat Intel Feed', status: 'healthy', latency: '45ms', throughput: '420 eps' },
-  { name: 'IOC Enrichment', status: 'warning', latency: '230ms', throughput: '85 eps' },
-  { name: 'ML Detection', status: 'healthy', latency: '18ms', throughput: '650 eps' },
-  { name: 'Alert Correlation', status: 'healthy', latency: '6ms', throughput: '3.2K eps' },
-  { name: 'Case Management', status: 'healthy', latency: '15ms', throughput: '120 eps' },
-  { name: 'Report Engine', status: 'healthy', latency: '32ms', throughput: '45 eps' },
-]
-
-const recentEvents = [
-  { time: '09:32:14', event: 'Alert ingested: Brute Force RDP', source: 'Firewall', severity: 'high' },
-  { time: '09:32:12', event: 'Correlation rule triggered: Lateral Movement', source: 'Correlation Engine', severity: 'critical' },
-  { time: '09:32:08', event: 'IOC enrichment complete: 185.220.101.47', source: 'Enrichment', severity: 'info' },
-  { time: '09:32:05', event: 'ML model flagged suspicious PowerShell', source: 'ML Detection', severity: 'high' },
-  { time: '09:31:58', event: 'EDR telemetry: Process injection detected', source: 'EDR', severity: 'critical' },
-  { time: '09:31:52', event: 'Threat intel match: Cobalt Strike signature', source: 'Intel Feed', severity: 'critical' },
-  { time: '09:31:45', event: 'Case auto-created: INV-2026-004291', source: 'Case Mgmt', severity: 'info' },
-  { time: '09:31:38', event: 'Alert ingested: DGA Domain Query', source: 'DNS Monitor', severity: 'medium' },
-]
+const POLL_MS = 10000
 
 export default function LiveMonitoring() {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [liveMetrics, setLiveMetrics] = useState({ alerts: 2847, events: 45231, eps: 3240, latency: 14 })
+  const [alerts, setAlerts] = useState<AlertRow[]>([])
+  const [readouts, setReadouts] = useState<Record<string, number>>({})
+  const [state, setState] = useState<'connecting' | 'live' | 'offline'>('connecting')
+  const [lastRefresh, setLastRefresh] = useState<string>('')
+  const cursorRef = useRef(0)
 
-  // Animated metrics line
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    const dpr = Math.min(window.devicePixelRatio, 2)
-    const w = canvas.clientWidth
-    const h = canvas.clientHeight
-    canvas.width = w * dpr
-    canvas.height = h * dpr
-    ctx.scale(dpr, dpr)
-
-    const dataPoints: number[] = []
-    for (let i = 0; i < 100; i++) {
-      dataPoints.push(30 + Math.sin(i * 0.15) * 20 + Math.random() * 10)
-    }
-
-    let offset = 0
-    let animId = 0
-
-    const draw = () => {
-      ctx.clearRect(0, 0, w, h)
-
-      // Draw grid
-      ctx.strokeStyle = '#1A1A1A'
-      ctx.lineWidth = 0.5
-      for (let i = 0; i < 5; i++) {
-        const y = (h / 4) * i
-        ctx.beginPath()
-        ctx.moveTo(0, y)
-        ctx.lineTo(w, y)
-        ctx.stroke()
-      }
-
-      // Draw line
-      ctx.strokeStyle = '#FF7A00'
-      ctx.lineWidth = 1.5
-      ctx.beginPath()
-      for (let i = 0; i < dataPoints.length; i++) {
-        const x = (i / (dataPoints.length - 1)) * w
-        const y = h - dataPoints[(i + offset) % dataPoints.length]
-        if (i === 0) ctx.moveTo(x, y)
-        else ctx.lineTo(x, y)
-      }
-      ctx.stroke()
-
-      // Draw fill
-      ctx.fillStyle = 'rgba(255, 122, 0, 0.08)'
-      ctx.lineTo(w, h)
-      ctx.lineTo(0, h)
-      ctx.closePath()
-      ctx.fill()
-
-      offset = (offset + 0.5) % dataPoints.length
-      animId = requestAnimationFrame(draw)
-    }
-
-    draw()
-
-    return () => cancelAnimationFrame(animId)
+  const poll = useCallback(() => {
+    fetchAlerts(cursorRef.current, 50).then(
+      (data) => {
+        const fresh = data.alerts || []
+        if (fresh.length) {
+          setAlerts((prev) => [...fresh, ...prev].slice(0, 100))
+          if (data.cursor) cursorRef.current = data.cursor
+        }
+        setState('live')
+        setLastRefresh(new Date().toLocaleTimeString())
+      },
+      () => setState('offline'),
+    )
   }, [])
 
-  // Simulate live metric updates
   useEffect(() => {
-    const interval = setInterval(() => {
-      setLiveMetrics(prev => ({
-        alerts: prev.alerts + Math.floor(Math.random() * 3),
-        events: prev.events + Math.floor(Math.random() * 50),
-        eps: 3200 + Math.floor(Math.random() * 200),
-        latency: 10 + Math.floor(Math.random() * 20),
-      }))
-    }, 3000)
-    return () => clearInterval(interval)
-  }, [])
+    fetchStats().then((s) => setReadouts(s.readouts || {}), () => {})
+    poll()
+    const id = setInterval(() => {
+      if (!document.hidden) poll()
+    }, POLL_MS)
+    return () => clearInterval(id)
+  }, [poll])
+
+  const ack = (id: number) => {
+    setAlerts((prev) => prev.map((a) => (a.alert_id === id ? { ...a, acknowledged: true } : a)))
+    ackAlert(id).catch(() =>
+      setAlerts((prev) => prev.map((a) => (a.alert_id === id ? { ...a, acknowledged: false } : a))),
+    )
+  }
+
+  const unacked = alerts.filter((a) => !a.acknowledged).length
+
+  const metrics = [
+    { icon: AlertTriangle, color: '#EF4444', label: 'Unacked Alerts', value: unacked },
+    { icon: Activity, color: '#FF7A00', label: 'Alerts (session)', value: alerts.length },
+    { icon: Database, color: '#14B8A6', label: 'Docs Indexed', value: readouts.docs_indexed ?? 0 },
+    { icon: Fingerprint, color: '#3B82F6', label: 'IOCs Extracted', value: readouts.iocs_extracted ?? 0 },
+  ]
 
   return (
-    <div className="p-8 max-w-[1400px] mx-auto space-y-6">
-      {/* Live Metrics */}
-      <div className="grid grid-cols-4 gap-4">
-        <div className="bg-sr-surface border border-sr-border rounded-lg p-5 card-shadow">
-          <div className="flex items-center gap-2 mb-2">
-            <Activity size={14} className="text-sr-accent" />
-            <span className="text-[11px] text-sr-text-secondary uppercase tracking-wider">Events/sec</span>
-          </div>
-          <div className="text-2xl font-mono font-semibold text-sr-text">{liveMetrics.eps.toLocaleString()}</div>
-          <div className="text-[10px] text-sr-green mt-1">+2.4% from last hour</div>
+    <div className="mx-auto max-w-[1400px] space-y-6 p-8">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Wifi size={16} className={state === 'live' ? 'text-sr-green animate-pulse-dot' : 'text-sr-text-tertiary'} />
+          <h2 className="font-display text-xl font-bold text-sr-text">Live Monitoring</h2>
+          <span className={`text-[11px] font-mono uppercase ${state === 'live' ? 'text-sr-green' : state === 'offline' ? 'text-sr-red' : 'text-sr-text-tertiary'}`}>
+            {state}
+          </span>
         </div>
-        <div className="bg-sr-surface border border-sr-border rounded-lg p-5 card-shadow">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle size={14} className="text-sr-red" />
-            <span className="text-[11px] text-sr-text-secondary uppercase tracking-wider">Active Alerts</span>
-          </div>
-          <div className="text-2xl font-mono font-semibold text-sr-text">{liveMetrics.alerts.toLocaleString()}</div>
-          <div className="text-[10px] text-sr-red mt-1">+12 in last 5 min</div>
-        </div>
-        <div className="bg-sr-surface border border-sr-border rounded-lg p-5 card-shadow">
-          <div className="flex items-center gap-2 mb-2">
-            <Server size={14} className="text-sr-teal" />
-            <span className="text-[11px] text-sr-text-secondary uppercase tracking-wider">Total Events</span>
-          </div>
-          <div className="text-2xl font-mono font-semibold text-sr-text">{liveMetrics.events.toLocaleString()}</div>
-          <div className="text-[10px] text-sr-text-tertiary mt-1">Since midnight UTC</div>
-        </div>
-        <div className="bg-sr-surface border border-sr-border rounded-lg p-5 card-shadow">
-          <div className="flex items-center gap-2 mb-2">
-            <Clock size={14} className="text-sr-yellow" />
-            <span className="text-[11px] text-sr-text-secondary uppercase tracking-wider">Avg Latency</span>
-          </div>
-          <div className="text-2xl font-mono font-semibold text-sr-text">{liveMetrics.latency}ms</div>
-          <div className="text-[10px] text-sr-green mt-1">-3ms from baseline</div>
-        </div>
+        <span className="font-mono text-[11px] text-sr-text-tertiary">
+          {lastRefresh ? `last refresh ${lastRefresh}` : '…'} · polling {POLL_MS / 1000}s
+        </span>
       </div>
 
-      {/* Services + Event Stream */}
-      <div className="grid grid-cols-3 gap-6">
-        {/* Services */}
-        <div className="col-span-1 bg-sr-surface border border-sr-border rounded-lg p-5 card-shadow">
-          <h2 className="text-sm font-semibold text-sr-text mb-4">Pipeline Services</h2>
-          <div className="space-y-2">
-            {services.map(service => (
-              <div key={service.name} className="flex items-center gap-3 p-2.5 bg-sr-elevated rounded border border-sr-border">
-                {service.status === 'healthy' ? (
-                  <CheckCircle size={14} className="text-sr-green shrink-0" />
-                ) : (
-                  <AlertTriangle size={14} className="text-sr-yellow shrink-0" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium text-sr-text">{service.name}</div>
-                  <div className="text-[10px] text-sr-text-tertiary">{service.throughput}</div>
-                </div>
-                <span className={`text-[10px] font-mono ${service.status === 'healthy' ? 'text-sr-green' : 'text-sr-yellow'}`}>
-                  {service.latency}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Live Event Stream */}
-        <div className="col-span-2 bg-sr-surface border border-sr-border rounded-lg card-shadow overflow-hidden">
-          <div className="p-5 border-b border-sr-border">
-            <div className="flex items-center gap-2">
-              <Wifi size={14} className="text-sr-green animate-pulse-dot" />
-              <h2 className="text-sm font-semibold text-sr-text">Live Event Stream</h2>
+      {/* Metrics */}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        {metrics.map((m) => (
+          <div key={m.label} className="rounded-lg border border-sr-border bg-sr-surface p-5 card-shadow">
+            <div className="mb-2 flex items-center gap-2">
+              <m.icon size={14} style={{ color: m.color }} />
+              <span className="text-[11px] uppercase tracking-wider text-sr-text-secondary">{m.label}</span>
             </div>
+            <div className="font-mono text-2xl font-semibold text-sr-text">{m.value.toLocaleString()}</div>
           </div>
-          <div className="divide-y divide-sr-border max-h-[400px] overflow-y-auto">
-            {recentEvents.map((evt, i) => (
-              <div key={i} className="flex items-center gap-4 px-5 py-3 hover:bg-sr-elevated transition-colors">
-                <span className="text-[11px] font-mono text-sr-accent w-16 shrink-0">{evt.time}</span>
-                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                  evt.severity === 'critical' ? 'bg-sr-red' :
-                  evt.severity === 'high' ? 'bg-sr-accent' :
-                  evt.severity === 'medium' ? 'bg-sr-yellow' : 'bg-sr-blue'
-                }`} />
-                <div className="flex-1 min-w-0">
-                  <span className="text-xs text-sr-text truncate block">{evt.event}</span>
-                </div>
-                <span className="text-[10px] text-sr-text-tertiary shrink-0">{evt.source}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        ))}
       </div>
 
-      {/* Throughput Graph */}
-      <div className="bg-sr-surface border border-sr-border rounded-lg p-5 card-shadow">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-sr-text">Pipeline Throughput</h2>
-          <span className="text-[11px] text-sr-text-tertiary font-mono">Real-time</span>
+      {/* Live alert stream */}
+      <div className="overflow-hidden rounded-lg border border-sr-border bg-sr-surface card-shadow">
+        <div className="flex items-center justify-between border-b border-sr-border p-5">
+          <h2 className="text-sm font-semibold text-sr-text">Live Alert Stream</h2>
+          <span className="font-mono text-[11px] text-sr-text-tertiary">{unacked} unacked</span>
         </div>
-        <div className="w-full h-48">
-          <canvas ref={canvasRef} className="w-full h-full" />
+        <div className="max-h-[460px] overflow-y-auto">
+          {state === 'connecting' && alerts.length === 0 && (
+            <div className="flex items-center gap-2 px-5 py-8 text-sm text-sr-text-secondary">
+              <Loader2 size={15} className="animate-spin" /> Connecting to alert feed…
+            </div>
+          )}
+          {state !== 'connecting' && alerts.length === 0 && (
+            <p className="px-5 py-8 text-center text-sm text-sr-text-tertiary">No alerts in the feed.</p>
+          )}
+          <table className="w-full">
+            <tbody className="divide-y divide-sr-border">
+              {alerts.map((a) => {
+                const c = sevHex(normSeverity(a.severity))
+                return (
+                  <tr key={a.alert_id} className={a.acknowledged ? 'opacity-50' : ''}>
+                    <td className="px-5 py-3">
+                      <span className="h-2 w-2 rounded-full" style={{ background: c, display: 'inline-block' }} />
+                    </td>
+                    <td className="px-2 py-3"><span className="font-mono text-[11px] uppercase" style={{ color: c }}>{String(a.severity || '').toLowerCase()}</span></td>
+                    <td className="px-2 py-3 font-mono text-[11px] text-sr-text-secondary">{a.alert_type}</td>
+                    <td className="px-2 py-3 text-sm text-sr-text">{a.title}</td>
+                    <td className="px-2 py-3 font-mono text-[11px] text-sr-text-tertiary">{a.created_at}</td>
+                    <td className="px-5 py-3 text-right">
+                      {a.acknowledged ? (
+                        <span className="inline-flex items-center gap-1 font-mono text-[10px] text-sr-green"><Check size={11} /> ACK'D</span>
+                      ) : (
+                        <button onClick={() => ack(a.alert_id)} className="rounded border border-sr-border px-2 py-0.5 font-mono text-[10px] text-sr-text-secondary hover:border-sr-accent hover:text-sr-accent">
+                          ACK
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
