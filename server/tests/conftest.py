@@ -54,6 +54,9 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-" + "x" * 40)
     monkeypatch.setenv("DEFAULT_ADMIN_PASSWORD", "Test-Admin-Pass-123")
     monkeypatch.setenv("CHROMA_DB_PATH", str(tmp_path / "chroma"))
+    # Disable rate limiting for the general suite (cumulative test requests would
+    # otherwise trip the limiter). The dedicated 429 test re-enables it.
+    monkeypatch.setenv("RATELIMIT_ENABLED", "false")
 
     import app as app_module
 

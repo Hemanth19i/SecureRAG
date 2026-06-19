@@ -72,7 +72,7 @@ def enrich_ip(value, itype="ip"):
     try:
         url = ABUSEIPDB_URL + "?" + urllib.parse.urlencode({"ipAddress": value, "maxAgeInDays": 90})
         req = urllib.request.Request(url, headers={"Key": ABUSEIPDB_API_KEY, "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310 - fixed https AbuseIPDB endpoint; only query string varies
             payload = json.loads(resp.read().decode("utf-8"))
         d = payload.get("data", {}) or {}
         abuse = int(d.get("abuseConfidenceScore", 0) or 0)

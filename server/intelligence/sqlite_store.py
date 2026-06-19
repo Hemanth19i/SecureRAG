@@ -511,7 +511,7 @@ class SQLiteStore:
             cursor = conn.cursor()
             placeholders = ','.join(['?'] * len(ioc_values))
             cursor.execute(
-                f"SELECT ioc_value, correlation_data FROM global_correlations WHERE ioc_value IN ({placeholders})",
+                f"SELECT ioc_value, correlation_data FROM global_correlations WHERE ioc_value IN ({placeholders})",  # nosec B608 - '?' placeholders only; ioc_values bound as params
                 ioc_values
             )
             rows = cursor.fetchall()
@@ -755,7 +755,7 @@ class SQLiteStore:
                 clauses.append("assigned_to = ?"); params.append(assigned_to)
             where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
             cursor.execute(
-                "SELECT case_id, title, status, severity, summary, query, "
+                "SELECT case_id, title, status, severity, summary, query, "  # nosec B608 - WHERE built from fixed clauses; values bound as params
                 "created_by, assigned_to, created_at, updated_at "
                 "FROM cases" + where + " ORDER BY updated_at DESC",
                 params,
@@ -792,7 +792,7 @@ class SQLiteStore:
             sets.append("updated_at = CURRENT_TIMESTAMP")
             params.append(case_id)
             cur = conn.execute(
-                "UPDATE cases SET " + ", ".join(sets) + " WHERE case_id = ?",
+                "UPDATE cases SET " + ", ".join(sets) + " WHERE case_id = ?",  # nosec B608 - SET built from fixed field names; values bound as params
                 params,
             )
             if managed:
