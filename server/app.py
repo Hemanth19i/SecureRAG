@@ -13,12 +13,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from datetime import timedelta
 from api.routes import api_bp
 from api.auth import auth_bp
+from api.extensions import limiter
 from rag.vectorstore import VectorStore
 from intelligence.sqlite_store import SQLiteStore
 
@@ -61,6 +62,19 @@ def create_app():
     # Register blueprints
     app.register_blueprint(api_bp)
     app.register_blueprint(auth_bp, url_prefix='/auth')
+
+    # Rate limiting (Flask-Limiter). Global default + stricter /auth/login (see
+    # auth.py). All tunables come from env; tests set RATELIMIT_ENABLED=false.
+    app.config["RATELIMIT_ENABLED"] = os.getenv("RATELIMIT_ENABLED", "true").lower() in ("1", "true", "yes")
+    app.config["RATELIMIT_DEFAULT"] = os.getenv("RATELIMIT_DEFAULT", "200 per minute")
+    app.config["RATELIMIT_STORAGE_URI"] = os.getenv("RATELIMIT_STORAGE_URI", "memory://")
+    app.config["RATELIMIT_HEADERS_ENABLED"] = True
+    limiter.init_app(app)
+
+    @app.errorhandler(429)
+    def _ratelimit_exceeded(e):  # noqa: ANN001
+        return jsonify({"error": "Too many requests",
+                        "detail": str(getattr(e, "description", ""))}), 429
 
     # Initialize ChromaDB on startup
     with app.app_context():

@@ -7,6 +7,8 @@ from flask import Blueprint, request, jsonify, current_app
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required, get_jwt_identity, get_jwt
 
+from api.extensions import limiter, LOGIN_RATELIMIT
+
 logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint('auth', __name__)
@@ -64,6 +66,7 @@ def register():
         return jsonify({"error": "Username already exists"}), 409
 
 @auth_bp.route('/login', methods=['POST'])
+@limiter.limit(LOGIN_RATELIMIT)
 def login():
     ip = _client_ip()
     if _login_rate_limited(ip):
