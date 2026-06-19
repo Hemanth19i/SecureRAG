@@ -76,6 +76,24 @@ def create_app():
         return jsonify({"error": "Too many requests",
                         "detail": str(getattr(e, "description", ""))}), 429
 
+    # Security response headers (applied to every response, incl. errors). Manual
+    # after_request keeps full control and adds no dependency. Toggle via env.
+    security_headers_enabled = os.getenv("SECURITY_HEADERS_ENABLED", "true").lower() in ("1", "true", "yes")
+
+    @app.after_request
+    def _set_security_headers(resp):  # noqa: ANN001
+        if security_headers_enabled:
+            resp.headers.setdefault("X-Content-Type-Options", "nosniff")          # block MIME sniffing
+            resp.headers.setdefault("X-Frame-Options", "DENY")                    # clickjacking: no framing
+            resp.headers.setdefault("Referrer-Policy", "no-referrer")             # don't leak URLs
+            resp.headers.setdefault("Strict-Transport-Security",                  # force HTTPS (honoured over TLS)
+                                    "max-age=31536000; includeSubDomains")
+            # API returns JSON and the SPA is a separate origin, so a strict CSP
+            # here does not affect the frontend.
+            resp.headers.setdefault("Content-Security-Policy",
+                                    "default-src 'self'; frame-ancestors 'none'")
+        return resp
+
     # Initialize ChromaDB on startup
     with app.app_context():
         try:

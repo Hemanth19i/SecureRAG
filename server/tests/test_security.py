@@ -34,3 +34,14 @@ def test_rate_limit_returns_429_when_exceeded(ratelimited_client):
 def test_rate_limit_disabled_does_not_429(client):
     # The conftest `app` fixture disables limiting; many requests stay un-429'd.
     assert all(client.get("/stats").status_code != 429 for _ in range(10))
+
+
+# --- security headers (Part C) ---------------------------------------------
+def test_security_headers_present_on_every_response(client):
+    # Headers must be set even on an unauthenticated (401) response.
+    h = client.get("/stats").headers
+    assert h.get("X-Content-Type-Options") == "nosniff"
+    assert h.get("X-Frame-Options") == "DENY"
+    assert h.get("Referrer-Policy") == "no-referrer"
+    assert "max-age=" in (h.get("Strict-Transport-Security") or "")
+    assert "default-src 'self'" in (h.get("Content-Security-Policy") or "")

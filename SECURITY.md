@@ -26,6 +26,27 @@ bandit -r api intelligence rag eval app.py run_production.py wsgi.py --severity-
 pip-audit -r requirements.txt --ignore-vuln CVE-2026-45829 --ignore-vuln PYSEC-2025-217 --ignore-vuln CVE-2026-1839
 ```
 
+## Security Response Headers
+
+Set on every response via an `after_request` hook (toggle with
+`SECURITY_HEADERS_ENABLED`):
+
+| Header | Value | Purpose |
+|---|---|---|
+| `X-Content-Type-Options` | `nosniff` | Stop browsers MIME-sniffing responses. |
+| `X-Frame-Options` | `DENY` | Block framing (clickjacking). |
+| `Referrer-Policy` | `no-referrer` | Don't leak URLs in the `Referer` header. |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | Force HTTPS (honoured by browsers over TLS). |
+| `Content-Security-Policy` | `default-src 'self'; frame-ancestors 'none'` | Lock content sources. The API serves JSON and the SPA is a separate origin, so this does not affect the frontend. |
+
+## Rate Limiting
+
+Flask-Limiter applies a global default (`RATELIMIT_DEFAULT`, 200/min) plus a
+stricter `/auth/login` limit (`RATELIMIT_LOGIN`, 5/min), layered on top of the
+existing in-memory login throttle. Exceeding a limit returns `429` with a JSON
+body. Storage is in-memory by default (`RATELIMIT_STORAGE_URI`); use Redis for
+multi-process deployments.
+
 ## Bandit Suppressions (documented `# nosec`)
 
 All suppressions are line-specific (`# nosec <ID>`), so new occurrences elsewhere
