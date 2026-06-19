@@ -157,6 +157,8 @@ export interface CaseRow {
   query: string;
   created_at: string;
   updated_at?: string;
+  // Stored at creation (mirrors the /query response); present on the detail view.
+  snapshot?: unknown;
 }
 
 export interface CaseAuditEntry {
