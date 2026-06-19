@@ -1,67 +1,64 @@
-import { useState } from 'react'
-import { TrendingUp, TrendingDown, Minus, ArrowRight } from 'lucide-react'
+import { TrendingUp, AlertTriangle, Loader2, ArrowRight, FileText, Database } from 'lucide-react'
+import { useNavigate } from 'react-router'
 import HeroCanvas from '@/components/HeroCanvas'
-import ThreatActivityChart from '@/components/ThreatActivityChart'
-import StatusBadge from '@/components/StatusBadge'
-import SeverityDot from '@/components/SeverityDot'
-import { investigations, alerts, iocs, chartData } from '@/data/demo'
+import { fetchStats, fetchCases, fetchAlerts } from '@/lib/api'
+import type { StatsResponse, CaseRow, AlertRow } from '@/lib/backend'
+import { useApiData } from '@/lib/useApi'
+import { normSeverity, sevHex } from '@/lib/format'
 
-const metrics = [
-  { label: 'Active Alerts', value: '2,847', trend: 12, direction: 'up' as const },
-  { label: 'Critical Threats', value: '23', trend: 5, direction: 'down' as const },
-  { label: 'Open Cases', value: '156', trend: 3, direction: 'up' as const },
-  { label: 'High-Risk IOCs', value: '1,204', trend: 0, direction: 'neutral' as const },
+interface DashData {
+  stats: StatsResponse
+  cases: CaseRow[]
+  alerts: AlertRow[]
+}
+
+const metricDefs = [
+  { key: 'docs_indexed', label: 'Docs Indexed' },
+  { key: 'iocs_extracted', label: 'IOCs Extracted' },
+  { key: 'threats_critical', label: 'Critical Threats', critical: true },
+  { key: 'mitre_mapped', label: 'MITRE Mapped' },
 ]
 
 export default function Dashboard() {
-  const [alertFilter, setAlertFilter] = useState('All')
-  const alertFilters = ['All', 'Critical', 'High', 'Medium']
+  const navigate = useNavigate()
+  const { status, data, error, reload } = useApiData<DashData>(async () => {
+    const [stats, cases, alerts] = await Promise.all([
+      fetchStats(),
+      fetchCases(),
+      fetchAlerts(0, 8),
+    ])
+    return { stats, cases, alerts: alerts.alerts }
+  })
 
-  const filteredAlerts = alertFilter === 'All'
-    ? alerts.slice(0, 8)
-    : alerts.filter(a => a.severity === alertFilter.toLowerCase()).slice(0, 8)
+  const readouts = data?.stats.readouts ?? {}
+  const evidence = data?.stats.evidence ?? []
+  const cases = data?.cases ?? []
+  const alerts = data?.alerts ?? []
 
   return (
     <div className="space-y-8 pb-8">
-      {/* Hero Section */}
+      {/* Hero */}
       <section className="relative" style={{ height: '60vh', minHeight: 480 }}>
         <HeroCanvas />
-
-        {/* Gradient overlay */}
         <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            background: 'linear-gradient(transparent 40%, #050505 100%)',
-            zIndex: 2,
-          }}
+          className="pointer-events-none absolute inset-0"
+          style={{ background: 'linear-gradient(transparent 40%, #050505 100%)', zIndex: 2 }}
         />
-
-        {/* Content overlay */}
         <div className="absolute bottom-0 left-0 right-0 z-10 px-8 pb-8">
-          <p className="text-center text-sr-text-secondary text-base font-normal mb-8">
+          <p className="mb-8 text-center text-base font-normal text-sr-text-secondary">
             AI-powered threat investigation platform
           </p>
-
-          {/* Metric Cards */}
-          <div className="grid grid-cols-4 gap-4 max-w-4xl mx-auto">
-            {metrics.map((m) => (
-              <div
-                key={m.label}
-                className="bg-sr-surface border border-sr-border rounded-lg p-5 card-shadow"
-              >
-                <div className="text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider mb-2">
+          <div className="mx-auto grid max-w-4xl grid-cols-2 gap-4 md:grid-cols-4">
+            {metricDefs.map((m) => (
+              <div key={m.key} className="rounded-lg border border-sr-border bg-sr-surface p-5 card-shadow">
+                <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-sr-text-secondary">
                   {m.label}
                 </div>
-                <div className="text-2xl font-mono font-medium text-sr-text mb-1.5">
-                  {m.value}
+                <div className={`font-mono text-2xl font-medium ${m.critical && (readouts[m.key] ?? 0) > 0 ? 'text-sr-red' : 'text-sr-text'}`}>
+                  {status === 'loading' ? '—' : (readouts[m.key] ?? 0).toLocaleString()}
                 </div>
-                <div className={`flex items-center gap-1 text-xs font-medium ${
-                  m.direction === 'up' ? 'text-sr-red' : m.direction === 'down' ? 'text-sr-green' : 'text-sr-text-tertiary'
-                }`}>
-                  {m.direction === 'up' && <TrendingUp size={12} />}
-                  {m.direction === 'down' && <TrendingDown size={12} />}
-                  {m.direction === 'neutral' && <Minus size={12} />}
-                  <span>{m.trend > 0 ? `+${m.trend}%` : m.trend < 0 ? `${m.trend}%` : '0%'}</span>
+                <div className="mt-1.5 flex items-center gap-1 text-xs font-medium text-sr-text-tertiary">
+                  <TrendingUp size={12} /> <span>live</span>
                 </div>
               </div>
             ))}
@@ -69,143 +66,110 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* Content Grid */}
-      <div className="px-8 max-w-[1400px] mx-auto space-y-8">
-        {/* Recent Investigations + Threat Activity */}
-        <div className="grid grid-cols-3 gap-6">
-          {/* Recent Investigations */}
-          <div className="col-span-1">
-            <div className="flex items-center justify-between mb-4">
+      <div className="mx-auto max-w-[1400px] space-y-8 px-8">
+        {status === 'error' && (
+          <div className="flex items-center justify-between rounded-lg border border-sr-red/30 bg-sr-red/10 px-4 py-3 text-sm text-sr-red">
+            <span className="flex items-center gap-2"><AlertTriangle size={15} /> {error}</span>
+            <button onClick={reload} className="text-xs underline">Retry</button>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          {/* Recent investigations (cases) */}
+          <div className="lg:col-span-1">
+            <div className="mb-4 flex items-center justify-between">
               <h2 className="text-base font-semibold text-sr-text">Recent Investigations</h2>
-              <button className="text-xs text-sr-accent hover:text-sr-accent-hover flex items-center gap-1 transition-colors">
+              <button onClick={() => navigate('/investigations')} className="flex items-center gap-1 text-xs text-sr-accent hover:text-sr-accent-hover">
                 View all <ArrowRight size={12} />
               </button>
             </div>
             <div className="space-y-3">
-              {investigations.slice(0, 5).map((inv) => (
-                <div
-                  key={inv.id}
-                  className="bg-sr-surface border border-sr-border rounded-lg p-4 card-shadow hover:border-sr-border-focus transition-colors cursor-pointer group"
-                >
-                  <div className="flex items-start justify-between mb-1.5">
-                    <span className="text-xs font-mono text-sr-accent">{inv.id}</span>
-                    <SeverityDot severity={inv.severity} />
+              {status === 'loading' && <Loader2 size={16} className="animate-spin text-sr-text-secondary" />}
+              {status === 'ready' && cases.length === 0 && (
+                <p className="rounded-lg border border-sr-border bg-sr-surface px-4 py-6 text-center text-xs text-sr-text-tertiary">
+                  No cases yet — save a query as a case.
+                </p>
+              )}
+              {cases.slice(0, 5).map((c) => {
+                const sc = sevHex(normSeverity(c.severity))
+                return (
+                  <div
+                    key={c.case_id}
+                    onClick={() => navigate('/investigations')}
+                    className="cursor-pointer rounded-lg border border-sr-border bg-sr-surface p-4 card-shadow transition-colors hover:border-sr-border-focus"
+                  >
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="font-mono text-xs text-sr-accent">{c.case_id.slice(0, 8)}</span>
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: sc }} />
+                    </div>
+                    <div className="mb-2 text-sm font-medium text-sr-text">{c.title}</div>
+                    <div className="flex items-center justify-between text-[11px] text-sr-text-tertiary">
+                      <span className="uppercase">{String(c.status || '').replace('_', ' ').toLowerCase()}</span>
+                      <span className="font-mono">{(c.created_at || '').slice(0, 10)}</span>
+                    </div>
                   </div>
-                  <div className="text-sm font-medium text-sr-text mb-2 group-hover:text-sr-accent transition-colors">
-                    {inv.title}
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <StatusBadge status={inv.status} />
-                    <span className="text-[11px] text-sr-text-tertiary">{inv.lastActivity}</span>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
 
-          {/* Threat Activity Chart + Alert Stream */}
-          <div className="col-span-2 space-y-6">
-            {/* Chart */}
-            <div className="bg-sr-surface border border-sr-border rounded-lg p-5 card-shadow">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-base font-semibold text-sr-text">Threat Activity</h2>
-                <span className="text-[11px] text-sr-text-tertiary font-mono">Last 7 days</span>
+          <div className="space-y-6 lg:col-span-2">
+            {/* Recent ingests (evidence) */}
+            <div className="rounded-lg border border-sr-border bg-sr-surface card-shadow">
+              <div className="flex items-center justify-between p-5 pb-3">
+                <h2 className="flex items-center gap-2 text-base font-semibold text-sr-text">
+                  <Database size={15} className="text-sr-accent" /> Recent Ingests
+                </h2>
+                <button onClick={() => navigate('/upload')} className="text-xs text-sr-accent hover:text-sr-accent-hover">Ingest</button>
               </div>
-              <ThreatActivityChart data={chartData} />
+              <div className="max-h-[240px] divide-y divide-sr-border overflow-y-auto">
+                {status === 'ready' && evidence.length === 0 && (
+                  <p className="px-5 py-6 text-center text-xs text-sr-text-tertiary">No files ingested yet.</p>
+                )}
+                {evidence.map((ev) => {
+                  const sc = sevHex(normSeverity(ev.severity))
+                  return (
+                    <div key={ev.upload_id} className="flex items-center gap-4 px-5 py-3">
+                      <FileText size={14} className="shrink-0 text-sr-text-tertiary" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-sr-text">{ev.filename}</div>
+                        <div className="font-mono text-[11px] text-sr-text-tertiary">
+                          {ev.ioc_count} IOCs · {ev.mitre_count} ATT&CK
+                        </div>
+                      </div>
+                      <span className="text-[11px] font-semibold uppercase" style={{ color: sc }}>{String(ev.severity || '').toLowerCase()}</span>
+                      <span className="shrink-0 font-mono text-[11px] text-sr-text-tertiary">{ev.ingested_at}</span>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
 
-            {/* Alert Stream */}
-            <div className="bg-sr-surface border border-sr-border rounded-lg card-shadow">
+            {/* Live alert stream */}
+            <div className="rounded-lg border border-sr-border bg-sr-surface card-shadow">
               <div className="flex items-center justify-between p-5 pb-3">
                 <h2 className="text-base font-semibold text-sr-text">Live Alert Stream</h2>
-                <div className="flex items-center gap-1">
-                  {alertFilters.map(f => (
-                    <button
-                      key={f}
-                      onClick={() => setAlertFilter(f)}
-                      className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
-                        alertFilter === f
-                          ? 'bg-sr-accent/15 text-sr-accent'
-                          : 'text-sr-text-tertiary hover:text-sr-text-secondary'
-                      }`}
-                    >
-                      {f}
-                    </button>
-                  ))}
-                </div>
+                <button onClick={() => navigate('/monitoring')} className="text-xs text-sr-accent hover:text-sr-accent-hover">Monitor</button>
               </div>
-              <div className="divide-y divide-sr-border max-h-[360px] overflow-y-auto">
-                {filteredAlerts.map((alert) => (
-                  <div
-                    key={alert.id}
-                    className="flex items-center gap-4 px-5 py-3 hover:bg-sr-elevated transition-colors group"
-                  >
-                    <div className={`w-1 h-8 rounded-full shrink-0 ${
-                      alert.severity === 'critical' ? 'bg-sr-red' :
-                      alert.severity === 'high' ? 'bg-sr-accent' :
-                      alert.severity === 'medium' ? 'bg-sr-yellow' : 'bg-sr-green'
-                    }`} />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm text-sr-text font-medium truncate">{alert.title}</div>
-                      <div className="text-[11px] font-mono text-sr-text-secondary truncate">
-                        {alert.sourceIp} → {alert.destIp}
+              <div className="max-h-[300px] divide-y divide-sr-border overflow-y-auto">
+                {status === 'ready' && alerts.length === 0 && (
+                  <p className="px-5 py-6 text-center text-xs text-sr-text-tertiary">No alerts.</p>
+                )}
+                {alerts.map((a) => {
+                  const sc = sevHex(normSeverity(a.severity))
+                  return (
+                    <div key={a.alert_id} className="flex items-center gap-4 px-5 py-3">
+                      <div className="h-8 w-1 shrink-0 rounded-full" style={{ backgroundColor: sc }} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-sr-text">{a.title}</div>
+                        <div className="truncate font-mono text-[11px] text-sr-text-secondary">{a.alert_type}</div>
                       </div>
+                      <span className="shrink-0 font-mono text-[11px] text-sr-text-tertiary">{a.created_at}</span>
                     </div>
-                    <span className="text-[11px] text-sr-text-tertiary font-mono shrink-0">
-                      {new Date(alert.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                    <button className="text-[11px] text-sr-accent opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      Investigate
-                    </button>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* Threat Intelligence Feed */}
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-semibold text-sr-text">Threat Intelligence Feed</h2>
-            <button className="text-xs text-sr-accent hover:text-sr-accent-hover flex items-center gap-1 transition-colors">
-              View all <ArrowRight size={12} />
-            </button>
-          </div>
-          <div className="grid grid-cols-4 gap-4">
-            {iocs.slice(0, 4).map((ioc) => (
-              <div
-                key={ioc.id}
-                className="bg-sr-surface border border-sr-border rounded-lg p-4 card-shadow hover:border-sr-border-focus transition-colors"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-mono text-sr-accent truncate">{ioc.value}</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-sr-elevated text-sr-text-secondary uppercase">
-                    {ioc.type}
-                  </span>
-                </div>
-                <div className="text-xs text-sr-text mb-2">{ioc.threatFamily}</div>
-                <div className="mb-2">
-                  <div className="flex items-center justify-between text-[10px] text-sr-text-tertiary mb-1">
-                    <span>Confidence</span>
-                    <span className="font-mono">{ioc.confidence}%</span>
-                  </div>
-                  <div className="w-full h-1.5 rounded-full bg-sr-elevated overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-sr-red"
-                      style={{ width: `${ioc.confidence}%` }}
-                    />
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {ioc.sources.slice(0, 2).map(s => (
-                    <span key={s} className="text-[10px] px-1.5 py-0.5 rounded bg-sr-accent/10 text-sr-accent">
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       </div>

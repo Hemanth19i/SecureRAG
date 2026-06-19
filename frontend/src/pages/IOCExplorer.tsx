@@ -1,244 +1,216 @@
 import { useState } from 'react'
-import { Search, ExternalLink, Plus, Download, ShieldCheck, Hash, Globe, Link2 } from 'lucide-react'
-import { iocs } from '@/data/demo'
-import type { IOC } from '@/types'
+import { Search, ExternalLink, Loader2, AlertTriangle, ShieldCheck, Globe } from 'lucide-react'
+import { fetchCorrelation, fetchEnrichment } from '@/lib/api'
+import type { Correlation, CorrelationDetail, Enrichment } from '@/lib/backend'
+import { useApiData } from '@/lib/useApi'
+import { riskHex, sevHex, isPublicIp } from '@/lib/format'
 
-const typeIcons = {
-  ip: Globe,
-  hash: Hash,
-  domain: Globe,
-  url: Link2,
+interface Row extends CorrelationDetail {
+  value: string
+}
+
+function RiskPill({ level }: { level: string }) {
+  const c = riskHex(level)
+  return (
+    <span className="font-mono text-[11px] font-semibold" style={{ color: c }}>
+      {String(level || '').toUpperCase()}
+    </span>
+  )
 }
 
 export default function IOCExplorer() {
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('All')
-  const [selectedIOC, setSelectedIOC] = useState<IOC | null>(null)
+  const [selected, setSelected] = useState<Row | null>(null)
+  const [enr, setEnr] = useState<Record<string, Enrichment>>({})
+  const [enriching, setEnriching] = useState(false)
 
-  const filtered = iocs.filter(ioc => {
-    const matchSearch = search === '' || ioc.value.toLowerCase().includes(search.toLowerCase()) || ioc.threatFamily?.toLowerCase().includes(search.toLowerCase())
-    const matchType = typeFilter === 'All' || ioc.type === typeFilter.toLowerCase()
+  const { status, data, error, reload } = useApiData<Correlation & { high_risk_iocs: string[] }>(
+    () => fetchCorrelation(),
+  )
+
+  const rows: Row[] = Object.entries(data?.details ?? {}).map(([value, d]) => ({ value, ...d }))
+  const types = ['All', ...Array.from(new Set(rows.map((r) => r.type).filter(Boolean)))]
+
+  const filtered = rows.filter((r) => {
+    const matchSearch =
+      search === '' ||
+      r.value.toLowerCase().includes(search.toLowerCase()) ||
+      (r.category || '').toLowerCase().includes(search.toLowerCase())
+    const matchType = typeFilter === 'All' || r.type === typeFilter
     return matchSearch && matchType
   })
 
+  const publicTargets = rows.filter((r) => isPublicIp(r.value))
+
+  const enrichAll = async () => {
+    if (enriching || publicTargets.length === 0) return
+    setEnriching(true)
+    setEnr((prev) => {
+      const next = { ...prev }
+      publicTargets.forEach((t) => (next[t.value] = { status: 'loading' }))
+      return next
+    })
+    for (const t of publicTargets) {
+      try {
+        const d = await fetchEnrichment(t.value)
+        setEnr((prev) => ({ ...prev, [t.value]: d }))
+      } catch {
+        setEnr((prev) => ({ ...prev, [t.value]: { status: 'error' } }))
+      }
+    }
+    setEnriching(false)
+  }
+
+  const repCell = (r: Row) => {
+    if (!isPublicIp(r.value)) return <span className="text-sr-text-tertiary">—</span>
+    const e = enr[r.value]
+    if (!e) return <span className="text-sr-text-tertiary">—</span>
+    if (e.status === 'loading') return <Loader2 size={12} className="animate-spin text-sr-text-tertiary" />
+    if (e.status === 'ok' && e.verdict) {
+      const c = sevHex(String(e.verdict))
+      return (
+        <span className="font-mono text-[11px] font-semibold uppercase" style={{ color: c }}>
+          {String(e.verdict)}
+          {typeof e.abuse_confidence === 'number' ? ` ${e.abuse_confidence}` : ''}
+        </span>
+      )
+    }
+    if (e.status === 'unsupported') return <span className="text-sr-text-tertiary">—</span>
+    return <span className="font-mono text-[11px] text-sr-text-tertiary">{String(e.status).toUpperCase()}</span>
+  }
+
   return (
-    <div className="p-8 max-w-[1400px] mx-auto h-full flex flex-col">
-      {/* Search & Filter Bar */}
-      <div className="flex items-center gap-3 mb-6">
-        <div className="relative flex-1 max-w-xl">
+    <div className="mx-auto flex h-full max-w-[1400px] flex-col p-8">
+      <div className="mb-6 flex items-center gap-3">
+        <div className="relative max-w-xl flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-sr-text-tertiary" />
           <input
             type="text"
-            placeholder="Search by IP, hash, domain, URL..."
+            placeholder="Search indicators…"
             value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 bg-sr-surface border border-sr-border rounded-md text-sm font-mono text-sr-text placeholder:text-sr-text-tertiary focus:border-sr-accent focus:outline-none transition-colors"
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full rounded-md border border-sr-border bg-sr-surface py-2.5 pl-9 pr-4 font-mono text-sm text-sr-text placeholder:text-sr-text-tertiary transition-colors focus:border-sr-accent focus:outline-none"
           />
         </div>
         <select
           value={typeFilter}
-          onChange={e => setTypeFilter(e.target.value)}
-          className="px-3 py-2.5 bg-sr-surface border border-sr-border rounded-md text-sm text-sr-text-secondary focus:border-sr-accent focus:outline-none cursor-pointer"
+          onChange={(e) => setTypeFilter(e.target.value)}
+          className="cursor-pointer rounded-md border border-sr-border bg-sr-surface px-3 py-2.5 text-sm text-sr-text-secondary focus:border-sr-accent focus:outline-none"
         >
-          <option value="All">All Types</option>
-          <option value="IP">IP Address</option>
-          <option value="Hash">File Hash</option>
-          <option value="Domain">Domain</option>
-          <option value="URL">URL</option>
+          {types.map((t) => (
+            <option key={t} value={t}>{t === 'All' ? 'All Types' : t}</option>
+          ))}
         </select>
-        <select className="px-3 py-2.5 bg-sr-surface border border-sr-border rounded-md text-sm text-sr-text-secondary focus:border-sr-accent focus:outline-none cursor-pointer">
-          <option>All Confidence</option>
-          <option>High (90%+)</option>
-          <option>Medium (70-89%)</option>
-          <option>Low (&lt;70%)</option>
-        </select>
-        <button className="flex items-center gap-2 px-4 py-2.5 bg-sr-accent text-sr-text rounded-md text-sm font-medium hover:bg-sr-accent-hover transition-colors">
-          <ExternalLink size={14} />
-          Enrich
+        <button
+          onClick={enrichAll}
+          disabled={enriching || publicTargets.length === 0}
+          className="flex items-center gap-2 rounded-md bg-sr-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-sr-accent-hover disabled:opacity-50"
+        >
+          {enriching ? <Loader2 size={14} className="animate-spin" /> : <ExternalLink size={14} />}
+          Enrich {publicTargets.length > 0 ? `(${publicTargets.length} IP${publicTargets.length === 1 ? '' : 's'})` : ''}
         </button>
       </div>
 
-      {/* Split View */}
-      <div className="flex gap-6 flex-1 min-h-0">
-        {/* Table */}
-        <div className={`bg-sr-surface border border-sr-border rounded-lg overflow-hidden card-shadow ${selectedIOC ? 'flex-1' : 'w-full'}`}>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-sr-elevated">
-                  <th className="px-4 py-3 text-left text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider">Value</th>
-                  <th className="px-4 py-3 text-left text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider">Type</th>
-                  <th className="px-4 py-3 text-left text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider">Reputation</th>
-                  <th className="px-4 py-3 text-left text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider">First Seen</th>
-                  <th className="px-4 py-3 text-left text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider">Sources</th>
-                  <th className="px-4 py-3 text-left text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider">Threats</th>
-                  <th className="px-4 py-3 text-right text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-sr-border">
-                {filtered.map(ioc => {
-                  const Icon = typeIcons[ioc.type] || Globe
-                  const repColor = ioc.reputationScore >= 90 ? 'bg-sr-red' : ioc.reputationScore >= 70 ? 'bg-sr-accent' : 'bg-sr-yellow'
-                  return (
+      {status === 'loading' && (
+        <div className="flex items-center gap-2 text-sm text-sr-text-secondary">
+          <Loader2 size={15} className="animate-spin" /> Querying correlation engine…
+        </div>
+      )}
+      {status === 'error' && (
+        <div className="flex items-center justify-between rounded-lg border border-sr-red/30 bg-sr-red/10 px-4 py-3 text-sm text-sr-red">
+          <span className="flex items-center gap-2"><AlertTriangle size={15} /> {error}</span>
+          <button onClick={reload} className="text-xs underline">Retry</button>
+        </div>
+      )}
+      {status === 'ready' && rows.length === 0 && (
+        <div className="rounded-lg border border-sr-border bg-sr-surface px-5 py-10 text-center text-sm text-sr-text-tertiary card-shadow">
+          No correlated indicators yet — ingest logs to populate the correlation engine.
+        </div>
+      )}
+
+      {status === 'ready' && rows.length > 0 && (
+        <div className="flex min-h-0 flex-1 gap-6">
+          <div className={`overflow-hidden rounded-lg border border-sr-border bg-sr-surface card-shadow ${selected ? 'flex-1' : 'w-full'}`}>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-sr-elevated">
+                    {['Indicator', 'Type', 'Category', 'Role', 'Risk', 'Files', 'Freq', 'Reputation'].map((h) => (
+                      <th key={h} className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-sr-text-secondary">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-sr-border">
+                  {filtered.map((r) => (
                     <tr
-                      key={ioc.id}
-                      className={`hover:bg-sr-elevated transition-colors cursor-pointer ${selectedIOC?.id === ioc.id ? 'bg-sr-elevated' : ''}`}
-                      onClick={() => setSelectedIOC(ioc)}
+                      key={r.value}
+                      onClick={() => setSelected(r)}
+                      className={`cursor-pointer transition-colors hover:bg-sr-elevated ${selected?.value === r.value ? 'bg-sr-elevated' : ''}`}
                     >
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <Icon size={14} className="text-sr-accent shrink-0" />
-                          <span className="text-xs font-mono text-sr-accent truncate max-w-[180px]">{ioc.value}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-[10px] px-2 py-0.5 rounded bg-sr-elevated text-sr-text-secondary uppercase border border-sr-border">
-                          {ioc.type}
+                        <span className="flex items-center gap-2">
+                          <Globe size={13} className="shrink-0 text-sr-accent" />
+                          <span className="max-w-[200px] truncate font-mono text-xs text-sr-accent">{r.value}</span>
                         </span>
                       </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 rounded-full bg-sr-elevated overflow-hidden">
-                            <div className={`h-full rounded-full ${repColor}`} style={{ width: `${ioc.reputationScore}%` }} />
-                          </div>
-                          <span className="text-xs font-mono text-sr-text-secondary">{ioc.reputationScore}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-sr-text-tertiary font-mono">{ioc.firstSeen}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-1">
-                          {ioc.sources.slice(0, 2).map(s => (
-                            <span key={s} className="text-[10px] px-1.5 py-0.5 rounded bg-sr-accent/10 text-sr-accent">{s}</span>
-                          ))}
-                          {ioc.sources.length > 2 && (
-                            <span className="text-[10px] text-sr-text-tertiary">+{ioc.sources.length - 2}</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-xs text-sr-text-secondary">{ioc.associatedThreats.join(', ')}</span>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <button className="p-1.5 rounded hover:bg-sr-elevated text-sr-text-tertiary hover:text-sr-text transition-colors" title="Add to case">
-                            <Plus size={13} />
-                          </button>
-                          <button className="p-1.5 rounded hover:bg-sr-elevated text-sr-text-tertiary hover:text-sr-text transition-colors" title="Export">
-                            <Download size={13} />
-                          </button>
-                        </div>
-                      </td>
+                      <td className="px-4 py-3"><span className="rounded bg-sr-elevated px-2 py-0.5 text-[10px] uppercase text-sr-text-secondary">{r.type || '—'}</span></td>
+                      <td className="px-4 py-3 text-xs text-sr-text-secondary">{r.category || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-sr-text-secondary">{r.role || '—'}</td>
+                      <td className="px-4 py-3"><RiskPill level={r.risk_level} /></td>
+                      <td className="px-4 py-3 font-mono text-xs text-sr-text-secondary">{r.seen_in_files?.length ?? 0}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-sr-text-secondary">{r.frequency}</td>
+                      <td className="px-4 py-3">{repCell(r)}</td>
                     </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Detail Panel */}
-        {selectedIOC && (
-          <div className="w-[380px] bg-sr-surface border border-sr-border rounded-lg card-shadow overflow-y-auto shrink-0">
-            <div className="p-5 border-b border-sr-border">
-              <div className="flex items-center gap-2 mb-2">
-                {(() => { const Icon = typeIcons[selectedIOC.type] || Globe; return <Icon size={16} className="text-sr-accent" /> })()}
-                <span className="text-[10px] px-2 py-0.5 rounded bg-sr-elevated text-sr-text-secondary uppercase border border-sr-border">
-                  {selectedIOC.type}
-                </span>
-              </div>
-              <h3 className="text-base font-mono text-sr-accent break-all">{selectedIOC.value}</h3>
-              {selectedIOC.threatFamily && (
-                <p className="text-sm text-sr-text mt-1">{selectedIOC.threatFamily}</p>
-              )}
+                  ))}
+                </tbody>
+              </table>
             </div>
+          </div>
 
-            <div className="p-5 space-y-5">
-              {/* Reputation */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] text-sr-text-secondary uppercase tracking-wider">Reputation Score</span>
-                  <span className="text-lg font-mono font-medium text-sr-red">{selectedIOC.reputationScore}/100</span>
-                </div>
-                <div className="w-full h-2 rounded-full bg-sr-elevated overflow-hidden">
-                  <div
-                    className={`h-full rounded-full ${selectedIOC.reputationScore >= 90 ? 'bg-sr-red' : selectedIOC.reputationScore >= 70 ? 'bg-sr-accent' : 'bg-sr-yellow'}`}
-                    style={{ width: `${selectedIOC.reputationScore}%` }}
-                  />
+          {selected && (
+            <div className="w-[360px] shrink-0 overflow-y-auto rounded-lg border border-sr-border bg-sr-surface card-shadow">
+              <div className="border-b border-sr-border p-5">
+                <span className="rounded bg-sr-elevated px-2 py-0.5 text-[10px] uppercase text-sr-text-secondary">{selected.type}</span>
+                <h3 className="mt-2 break-all font-mono text-base text-sr-accent">{selected.value}</h3>
+                <div className="mt-1 flex items-center gap-2">
+                  <RiskPill level={selected.risk_level} />
+                  <span className="text-xs text-sr-text-secondary">{selected.category}</span>
                 </div>
               </div>
-
-              {/* Confidence */}
-              {selectedIOC.confidence && (
+              <div className="space-y-5 p-5">
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div><div className="text-[10px] uppercase text-sr-text-tertiary">Role</div><div className="text-sr-text">{selected.role || '—'}</div></div>
+                  <div><div className="text-[10px] uppercase text-sr-text-tertiary">Frequency</div><div className="font-mono text-sr-text">{selected.frequency}</div></div>
+                  <div><div className="text-[10px] uppercase text-sr-text-tertiary">First seen</div><div className="font-mono text-sr-text">{selected.first_seen || '—'}</div></div>
+                  <div><div className="text-[10px] uppercase text-sr-text-tertiary">Last seen</div><div className="font-mono text-sr-text">{selected.last_seen || '—'}</div></div>
+                </div>
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] text-sr-text-secondary uppercase tracking-wider">Confidence</span>
-                    <span className="text-sm font-mono text-sr-text">{selectedIOC.confidence}%</span>
+                  <h4 className="mb-2 text-[11px] uppercase tracking-wider text-sr-text-secondary">Seen in files ({selected.seen_in_files?.length ?? 0})</h4>
+                  <div className="space-y-1.5">
+                    {(selected.seen_in_files ?? []).map((f) => (
+                      <div key={f} className="flex items-center gap-2 rounded border border-sr-border bg-sr-elevated px-3 py-2">
+                        <ShieldCheck size={12} className="shrink-0 text-sr-green" />
+                        <span className="truncate text-xs text-sr-text">{f}</span>
+                      </div>
+                    ))}
                   </div>
-                  <div className="w-full h-1.5 rounded-full bg-sr-elevated overflow-hidden">
-                    <div className="h-full rounded-full bg-sr-accent" style={{ width: `${selectedIOC.confidence}%` }} />
-                  </div>
                 </div>
-              )}
-
-              {/* Sources */}
-              <div>
-                <h4 className="text-[11px] text-sr-text-secondary uppercase tracking-wider mb-2">Intelligence Sources</h4>
-                <div className="space-y-1.5">
-                  {selectedIOC.sources.map(source => (
-                    <div key={source} className="flex items-center gap-2 px-3 py-2 bg-sr-elevated rounded border border-sr-border">
-                      <ShieldCheck size={12} className="text-sr-green shrink-0" />
-                      <span className="text-xs text-sr-text">{source}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Associated Threats */}
-              <div>
-                <h4 className="text-[11px] text-sr-text-secondary uppercase tracking-wider mb-2">Associated Threats</h4>
-                <div className="flex flex-wrap gap-1.5">
-                  {selectedIOC.associatedThreats.map(threat => (
-                    <span key={threat} className="px-2 py-1 bg-sr-red/10 border border-sr-red/30 rounded text-xs text-sr-red">
-                      {threat}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {/* Timeline */}
-              <div>
-                <h4 className="text-[11px] text-sr-text-secondary uppercase tracking-wider mb-2">Timeline</h4>
-                <div className="space-y-2">
-                  <div className="flex items-center gap-3">
-                    <div className="w-2 h-2 rounded-full bg-sr-green shrink-0" />
-                    <div>
-                      <div className="text-[10px] text-sr-text-tertiary">First Seen</div>
-                      <div className="text-xs text-sr-text font-mono">{selectedIOC.firstSeen}</div>
+                {(selected.context_flags?.length ?? 0) > 0 && (
+                  <div>
+                    <h4 className="mb-2 text-[11px] uppercase tracking-wider text-sr-text-secondary">Context flags</h4>
+                    <div className="flex flex-wrap gap-1.5">
+                      {selected.context_flags.map((c) => (
+                        <span key={c} className="rounded border border-sr-accent/30 bg-sr-accent/10 px-2 py-1 text-xs text-sr-accent">{c}</span>
+                      ))}
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <div className="w-2 h-2 rounded-full bg-sr-accent shrink-0" />
-                    <div>
-                      <div className="text-[10px] text-sr-text-tertiary">Last Seen</div>
-                      <div className="text-xs text-sr-text font-mono">{selectedIOC.lastSeen}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="pt-3 border-t border-sr-border flex gap-2">
-                <button className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-sr-accent text-sr-text rounded text-xs font-medium hover:bg-sr-accent-hover transition-colors">
-                  <Plus size={12} /> Add to Case
-                </button>
-                <button className="flex items-center justify-center gap-2 px-3 py-2 bg-sr-elevated border border-sr-border text-sr-text-secondary rounded text-xs hover:text-sr-text hover:border-sr-border-focus transition-colors">
-                  <Download size={12} />
-                </button>
+                )}
               </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
