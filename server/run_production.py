@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 def main():
     app = create_app()
-    host = os.getenv("HOST", "0.0.0.0")
+    host = os.getenv("HOST", "0.0.0.0")  # nosec B104 - default container bind; override via HOST
     port = int(os.getenv("FLASK_PORT", "5000"))
     threads = int(os.getenv("WAITRESS_THREADS", "8"))
     logger.info("Starting Waitress on %s:%d (%d threads)", host, port, threads)

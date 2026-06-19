@@ -64,13 +64,11 @@ def correlate_iocs(iocs: dict, sqlite_store) -> dict:
 
         val_placeholders = ','.join(['?'] * len(ioc_values))
         type_placeholders = ','.join(['?'] * len(ioc_types))
-        query = f"""
-            SELECT DISTINCT m.chunk_id
-            FROM chunk_ioc_mapping m
-            JOIN extracted_iocs e ON m.ioc_value = e.ioc_value
-            WHERE e.ioc_value IN ({val_placeholders})
-            AND e.ioc_type IN ({type_placeholders})
-        """
+        query = (
+            "SELECT DISTINCT m.chunk_id FROM chunk_ioc_mapping m "
+            "JOIN extracted_iocs e ON m.ioc_value = e.ioc_value "
+            f"WHERE e.ioc_value IN ({val_placeholders}) AND e.ioc_type IN ({type_placeholders})"  # nosec B608 - only '?' placeholders interpolated; values bound as params
+        )
         cursor.execute(query, ioc_values + ioc_types)
         chunk_ids = [row[0] for row in cursor.fetchall()]
         
@@ -81,7 +79,7 @@ def correlate_iocs(iocs: dict, sqlite_store) -> dict:
         logger.debug("Fetched %s related chunks from SQLite.", len(chunk_ids))
         
         placeholders_chunks = ','.join(['?'] * len(chunk_ids))
-        cursor.execute(f"SELECT chunk_id, raw_text, source_file, timestamp_ingested FROM log_chunks WHERE chunk_id IN ({placeholders_chunks})", chunk_ids)
+        cursor.execute(f"SELECT chunk_id, raw_text, source_file, timestamp_ingested FROM log_chunks WHERE chunk_id IN ({placeholders_chunks})", chunk_ids)  # nosec B608 - only '?' placeholders interpolated; chunk_ids bound as params
         rows = cursor.fetchall()
         
         documents = [row['raw_text'] for row in rows]
