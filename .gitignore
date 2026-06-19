@@ -19,3 +19,10 @@ chroma_store/
 .coverage
 .pytest_cache/
 htmlcov/
+
+# Archived (pre-swap) Claude-built frontend — preserved on disk, not tracked
+frontend-claude-archive/
+
+# Node / frontend build artifacts
+node_modules/
+frontend/dist/
