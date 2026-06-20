@@ -11,6 +11,7 @@ venv/
 
 # ChromaDB vector store
 chroma_store/
+chroma_store_backup/
 
 # Secrets
 .env
