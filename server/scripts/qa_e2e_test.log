@@ -1,0 +1,8 @@
+2026-06-20 08:01:12 sshd[4021]: Failed password for root from 185.243.115.84 port 51344 ssh2
+2026-06-20 08:01:15 sshd[4021]: Failed password for root from 185.243.115.84 port 51345 ssh2
+2026-06-20 08:01:19 sshd[4021]: Failed password for invalid user admin from 185.243.115.84 port 51346 ssh2
+2026-06-20 08:01:24 sshd[4021]: Failed password for root from 185.243.115.84 port 51347 ssh2
+2026-06-20 08:02:03 sshd[4021]: Accepted password for root from 185.243.115.84 port 51399 ssh2
+2026-06-20 08:05:44 kernel: exploit attempt CVE-2021-44228 from 185.243.115.84 targeting /solr/admin
+2026-06-20 08:07:21 clamav: malware detected /tmp/.payload sha256=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+2026-06-20 08:09:55 firewall: outbound C2 connection to 193.42.33.21 host evil-c2-domain.example

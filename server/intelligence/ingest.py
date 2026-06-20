@@ -87,6 +87,7 @@ def ingest_text(text, filename, *, sqlite_store, vector_store, embedder,
     # fails, the whole upload is rolled back rather than left half-ingested.
     agg_mitre = []
     agg_timeline = []
+    upload_iocs = set()  # IOC values actually observed in THIS upload
     with sqlite_store.transaction() as conn:
         for i, chunk_text_content in enumerate(chunks):
             chunk_id = chunk_ids[i]
@@ -101,6 +102,7 @@ def ingest_text(text, filename, *, sqlite_store, vector_store, embedder,
                 for ioc_val in ioc_list:
                     single_type = _IOC_TYPE_MAP.get(ioc_type, ioc_type)
                     sqlite_store.store_ioc(ioc_val, single_type, chunk_id, conn=conn)
+                    upload_iocs.add(ioc_val)
 
             # 3. MITRE mapping
             mitre_matches = map_to_mitre(chunk_text_content)
@@ -121,13 +123,21 @@ def ingest_text(text, filename, *, sqlite_store, vector_store, embedder,
     global_correlations = correlate_iocs(all_iocs, sqlite_store)
     sqlite_store.store_global_correlation(global_correlations)
 
-    # Generate real-time alerts from this upload's existing analysis outputs.
-    alerts = build_alerts(agg_timeline, agg_mitre, global_correlations,
+    # Generate real-time alerts from THIS upload's analysis outputs. The
+    # correlation map spans all uploads, so scope the correlation-derived IOC
+    # alerts to IOCs actually seen in this upload — otherwise every upload
+    # re-fires HIGH_RISK_IOC / BRUTE_FORCE_SUCCESS for every previously-seen
+    # high-risk IOC. (Timeline / MITRE alerts are already this-upload-scoped.)
+    upload_correlations = {k: v for k, v in global_correlations.items() if k in upload_iocs}
+    alerts = build_alerts(agg_timeline, agg_mitre, upload_correlations,
                           source=filename, upload_id=upload_id)
+    # store_alert is idempotent (INSERT OR IGNORE on the unique index), so a
+    # repeat (alert_type, ioc_value) is skipped; count only rows actually stored.
+    stored = 0
     if alerts:
         with sqlite_store.transaction() as conn:
             for a in alerts:
-                sqlite_store.store_alert(a, conn=conn)
+                stored += sqlite_store.store_alert(a, conn=conn) or 0
 
     return {"status": "ok", "upload_id": upload_id,
-            "chunks_stored": len(chunks), "alerts_created": len(alerts)}
+            "chunks_stored": len(chunks), "alerts_created": stored}
