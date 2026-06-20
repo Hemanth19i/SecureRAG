@@ -12,10 +12,14 @@ interface DashData {
   alerts: AlertRow[]
 }
 
+// Most tiles read /stats readouts. "Critical Cases" instead counts real
+// critical-severity cases (source: 'cases') — the /stats threats_critical metric
+// measures HIGH-confidence MITRE chunks and stays 0 even when a CRITICAL case
+// exists, which misrepresented reality (QA finding SR-007).
 const metricDefs = [
   { key: 'docs_indexed', label: 'Docs Indexed' },
   { key: 'iocs_extracted', label: 'IOCs Extracted' },
-  { key: 'threats_critical', label: 'Critical Threats', critical: true },
+  { key: 'critical_cases', label: 'Critical Cases', critical: true, source: 'cases' as const },
   { key: 'mitre_mapped', label: 'MITRE Mapped' },
 ]
 
@@ -34,6 +38,9 @@ export default function Dashboard() {
   const evidence = data?.stats.evidence ?? []
   const cases = data?.cases ?? []
   const alerts = data?.alerts ?? []
+  const criticalCases = cases.filter((c) => normSeverity(c.severity) === 'critical').length
+  const metricValue = (m: (typeof metricDefs)[number]) =>
+    m.source === 'cases' ? criticalCases : (readouts[m.key] ?? 0)
 
   return (
     <div className="space-y-8 pb-8">
@@ -54,8 +61,8 @@ export default function Dashboard() {
                 <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-sr-text-secondary">
                   {m.label}
                 </div>
-                <div className={`font-mono text-2xl font-medium ${m.critical && (readouts[m.key] ?? 0) > 0 ? 'text-sr-red' : 'text-sr-text'}`}>
-                  {status === 'loading' ? '—' : (readouts[m.key] ?? 0).toLocaleString()}
+                <div className={`font-mono text-2xl font-medium ${m.critical && metricValue(m) > 0 ? 'text-sr-red' : 'text-sr-text'}`}>
+                  {status === 'loading' ? '—' : metricValue(m).toLocaleString()}
                 </div>
                 <div className="mt-1.5 flex items-center gap-1 text-xs font-medium text-sr-text-tertiary">
                   <TrendingUp size={12} /> <span>live</span>

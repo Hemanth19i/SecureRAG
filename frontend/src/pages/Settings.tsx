@@ -1,5 +1,11 @@
 import { useState } from 'react'
-import { Bell, Key, Users, Globe, Monitor, ToggleLeft, ToggleRight, Copy, RefreshCw, Check } from 'lucide-react'
+import { Bell, Key, Users, Globe, Monitor, ToggleLeft, ToggleRight, Copy, RefreshCw, Check, UserPlus, X, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { toast } from 'sonner'
+import { register, ApiError } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 
 const settingsSections = [
   { id: 'general', label: 'General', icon: Globe },
@@ -7,13 +13,6 @@ const settingsSections = [
   { id: 'api', label: 'API Keys', icon: Key },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'appearance', label: 'Appearance', icon: Monitor },
-]
-
-const users = [
-  { name: 'Sarah Chen', email: 'sarah.chen@securerag.io', role: 'Admin', lastActive: 'Now', avatar: 'SC' },
-  { name: 'Marcus Johnson', email: 'marcus.j@securerag.io', role: 'Analyst', lastActive: '5 min ago', avatar: 'MJ' },
-  { name: 'Elena Rodriguez', email: 'elena.r@securerag.io', role: 'Analyst', lastActive: '12 min ago', avatar: 'ER' },
-  { name: 'David Park', email: 'david.p@securerag.io', role: 'Viewer', lastActive: '1 hr ago', avatar: 'DP' },
 ]
 
 const apiKeys = [
@@ -32,10 +31,46 @@ const notificationSettings = [
 ]
 
 export default function Settings() {
+  const { role } = useAuth()
+  const isAdmin = role === 'ADMIN'
   const [activeSection, setActiveSection] = useState('general')
   const [notifs, setNotifs] = useState(notificationSettings)
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const [density, setDensity] = useState('default')
+
+  // Create-user modal (wired to the ADMIN-only POST /auth/register).
+  const [showCreate, setShowCreate] = useState(false)
+  const [cuUser, setCuUser] = useState('')
+  const [cuPass, setCuPass] = useState('')
+  const [cuRole, setCuRole] = useState('ANALYST')
+  const [cuBusy, setCuBusy] = useState(false)
+  const [cuError, setCuError] = useState('')
+
+  const createUser = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (cuUser.trim().length < 3 || cuPass.length < 8) {
+      setCuError('Username ≥ 3 chars and password ≥ 8 chars required.')
+      return
+    }
+    setCuBusy(true)
+    setCuError('')
+    try {
+      await register(cuUser.trim(), cuPass, cuRole)
+      toast.success(`User "${cuUser.trim()}" created`, { description: `Role: ${cuRole}. They can now log in.` })
+      setShowCreate(false)
+      setCuUser(''); setCuPass(''); setCuRole('ANALYST')
+    } catch (err) {
+      setCuError(
+        err instanceof ApiError
+          ? (err.status === 409 ? 'Username already exists.'
+            : err.status === 403 ? 'Only ADMIN can create users.'
+            : err.message)
+          : 'Could not create user.',
+      )
+    } finally {
+      setCuBusy(false)
+    }
+  }
 
   const toggleNotif = (index: number) => {
     setNotifs(prev => prev.map((n, i) => i === index ? { ...n, enabled: !n.enabled } : n))
@@ -112,48 +147,35 @@ export default function Settings() {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-sr-text">Users</h2>
-              <button className="px-4 py-2 bg-sr-accent text-sr-text rounded-md text-sm font-medium hover:bg-sr-accent-hover transition-colors">
-                + Add User
+              <button
+                onClick={() => { setCuError(''); setShowCreate(true) }}
+                disabled={!isAdmin}
+                title={isAdmin ? undefined : 'Only ADMIN can create users'}
+                className="flex items-center gap-1.5 px-4 py-2 bg-sr-accent text-white rounded-md text-sm font-medium hover:bg-sr-accent-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <UserPlus size={14} /> Add User
               </button>
             </div>
-            <div className="bg-sr-surface border border-sr-border rounded-lg card-shadow overflow-hidden">
-              <table className="w-full">
-                <thead>
-                  <tr className="bg-sr-elevated">
-                    <th className="px-4 py-3 text-left text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider">User</th>
-                    <th className="px-4 py-3 text-left text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider">Role</th>
-                    <th className="px-4 py-3 text-left text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider">Last Active</th>
-                    <th className="px-4 py-3 text-right text-[11px] font-medium text-sr-text-secondary uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-sr-border">
-                  {users.map(user => (
-                    <tr key={user.email} className="hover:bg-sr-elevated transition-colors">
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-sr-accent/20 flex items-center justify-center text-xs font-mono text-sr-accent font-medium">
-                            {user.avatar}
-                          </div>
-                          <div>
-                            <div className="text-sm text-sr-text font-medium">{user.name}</div>
-                            <div className="text-[11px] text-sr-text-secondary">{user.email}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-xs px-2 py-0.5 rounded bg-sr-elevated text-sr-text-secondary border border-sr-border">
-                          {user.role}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-sr-text-tertiary">{user.lastActive}</td>
-                      <td className="px-4 py-3 text-right">
-                        <button className="text-xs text-sr-accent hover:text-sr-accent-hover transition-colors">Edit</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+
+            {!isAdmin && (
+              <div className="flex items-center gap-2 rounded-lg border border-sr-yellow/30 bg-sr-yellow/10 px-4 py-3 text-sm text-sr-yellow">
+                <ShieldAlert size={15} className="shrink-0" />
+                User management requires an ADMIN session. You're signed in as {role || 'a non-admin role'}.
+              </div>
+            )}
+
+            {/* No GET /users endpoint exists in the backend, so we don't fabricate a
+                directory. Created users authenticate via /auth/login. */}
+            <div className="bg-sr-surface border border-sr-border rounded-lg card-shadow p-6 text-sm text-sr-text-secondary">
+              <Users size={18} className="text-sr-text-tertiary mb-2" />
+              <p>The backend has no user-directory endpoint, so existing users aren't listed here.</p>
+              <p className="mt-1 text-sr-text-tertiary">
+                {isAdmin
+                  ? 'Use “Add User” to create an account (ADMIN/ANALYST/VIEWER). New users sign in from the login screen.'
+                  : 'Ask an ADMIN to create accounts.'}
+              </p>
             </div>
+
           </div>
         )}
 
@@ -265,6 +287,59 @@ export default function Settings() {
           </div>
         )}
       </div>
+
+      {/* Create User modal (ADMIN-only; POST /auth/register) */}
+      {showCreate && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onClick={() => setShowCreate(false)} />
+          <form
+            onSubmit={createUser}
+            className="fixed left-1/2 top-1/2 z-50 w-[400px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 space-y-4 rounded-lg border border-sr-border bg-sr-surface p-6 card-shadow"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="flex items-center gap-2 text-base font-semibold text-sr-text">
+                <UserPlus size={16} className="text-sr-accent" /> Create User
+              </h3>
+              <button type="button" onClick={() => setShowCreate(false)} className="rounded p-1 text-sr-text-tertiary hover:bg-sr-elevated hover:text-sr-text">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="cu-user" className="text-xs text-sr-text-secondary">Username</Label>
+              <Input id="cu-user" value={cuUser} onChange={(e) => setCuUser(e.target.value)} autoComplete="off"
+                placeholder="analyst2" className="border-sr-border bg-sr-elevated font-mono text-sr-text" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="cu-pass" className="text-xs text-sr-text-secondary">Password</Label>
+              <Input id="cu-pass" type="password" value={cuPass} onChange={(e) => setCuPass(e.target.value)} autoComplete="new-password"
+                placeholder="≥ 8 characters" className="border-sr-border bg-sr-elevated font-mono text-sr-text" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="cu-role" className="text-xs text-sr-text-secondary">Role</Label>
+              <select id="cu-role" value={cuRole} onChange={(e) => setCuRole(e.target.value)}
+                className="w-full rounded-md border border-sr-border bg-sr-elevated px-3 py-2 text-sm text-sr-text focus:border-sr-accent focus:outline-none">
+                <option value="ANALYST">ANALYST</option>
+                <option value="VIEWER">VIEWER</option>
+                <option value="ADMIN">ADMIN</option>
+              </select>
+            </div>
+
+            {cuError && (
+              <div className="flex items-center gap-2 rounded border border-sr-red/30 bg-sr-red/10 px-3 py-2 text-xs text-sr-red">
+                <AlertTriangle size={13} className="shrink-0" /> {cuError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" variant="outline" onClick={() => setShowCreate(false)} className="border-sr-border">Cancel</Button>
+              <Button type="submit" disabled={cuBusy} className="bg-sr-accent text-white hover:bg-sr-accent-hover">
+                {cuBusy ? <><Loader2 size={14} className="animate-spin" /> Creating…</> : 'Create user'}
+              </Button>
+            </div>
+          </form>
+        </>
+      )}
     </div>
   )
 }

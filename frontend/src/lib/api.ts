@@ -16,6 +16,7 @@ import type {
   CaseRow,
   CaseDetail,
   CaseNote,
+  CaseEvidence,
   MitreMapResponse,
   TimelineResponse,
 } from "./backend";
@@ -197,6 +198,20 @@ export function logout() {
   clearSession();
 }
 
+// ADMIN-only user creation (POST /auth/register). Requires the caller's current
+// ADMIN token (apiFetch attaches it). Returns no token — the new user logs in
+// separately. Throws ApiError on 403 (not admin), 409 (username taken), 400.
+export async function register(
+  username: string,
+  password: string,
+  role: string,
+): Promise<{ message: string }> {
+  return apiFetch<{ message: string }>("/auth/register", {
+    method: "POST",
+    body: { username, password, role },
+  });
+}
+
 /* ------------------------------------------------------------------ endpoints */
 
 export function fetchQuery(query: string, topK?: number): Promise<QueryResponse> {
@@ -309,6 +324,19 @@ export async function addCaseNote(caseId: string, body: string): Promise<CaseNot
     { method: "POST", body: { body } },
   );
   return data.notes || [];
+}
+
+// Link evidence to a case: either a full {snapshot} (e.g. a /query result) or an
+// explicit {evidence_type, payload} reference. Returns the full evidence list.
+export async function linkCaseEvidence(
+  caseId: string,
+  body: { snapshot: unknown } | { evidence_type: string; payload: unknown },
+): Promise<CaseEvidence[]> {
+  const data = await apiFetch<{ evidence: CaseEvidence[] }>(
+    `/cases/${encodeURIComponent(caseId)}/link-evidence`,
+    { method: "POST", body },
+  );
+  return data.evidence || [];
 }
 
 /* ---------------------------------------------------------------- attack graph */

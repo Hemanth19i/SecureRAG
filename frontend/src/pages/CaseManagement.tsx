@@ -4,6 +4,7 @@ import { fetchCases } from '@/lib/api'
 import type { CaseRow } from '@/lib/backend'
 import { useApiData } from '@/lib/useApi'
 import { normSeverity, sevHex } from '@/lib/format'
+import CaseDetailDrawer from '@/components/CaseDetailDrawer'
 
 // Backend case statuses (server/api/routes.py PATCH allow-list).
 const columns = ['OPEN', 'IN_PROGRESS', 'CONTAINED', 'CLOSED'] as const
@@ -17,6 +18,7 @@ const columnLabels: Record<string, string> = {
 export default function CaseManagement() {
   const [search, setSearch] = useState('')
   const [sevFilter, setSevFilter] = useState<string[]>([])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const { status, data, error, reload } = useApiData<CaseRow[]>(() => fetchCases())
   const cases = data ?? []
@@ -109,6 +111,7 @@ export default function CaseManagement() {
                     return (
                       <div
                         key={c.case_id}
+                        onClick={() => setSelectedId(c.case_id)}
                         className="cursor-pointer rounded-lg border border-l-[3px] border-sr-border bg-sr-surface p-4 card-shadow transition-all hover:border-sr-border-focus"
                         style={{ borderLeftColor: sc }}
                       >
@@ -132,6 +135,8 @@ export default function CaseManagement() {
           })}
         </div>
       )}
+
+      <CaseDetailDrawer caseId={selectedId} onClose={() => setSelectedId(null)} onChanged={reload} />
     </div>
   )
 }

@@ -161,20 +161,29 @@ export interface CaseRow {
   snapshot?: unknown;
 }
 
+// Real columns from case_audit (append-only). `content` is a JSON string for
+// typed events ({field,from,to} / {evidence_type} / {title,severity}) or plain
+// text for a note. entry_type ∈ created|status_change|assignment|note|evidence_linked.
 export interface CaseAuditEntry {
-  actor: string;
+  audit_id: number;
+  case_id: string;
+  author: string;
   entry_type: string;
-  detail: unknown;
+  content: string | null;
   created_at: string;
 }
 
 export interface CaseNote {
+  note_id: number;
+  case_id: string;
   author: string;
   body: string;
   created_at: string;
 }
 
 export interface CaseEvidence {
+  evidence_id: number;
+  case_id: string;
   evidence_type: string;
   payload: unknown;
   linked_by: string;
