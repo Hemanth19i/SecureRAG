@@ -264,6 +264,21 @@ class SQLiteStore:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ack ON alerts(acknowledged)")
+            # Idempotency: at most one alert per (alert_type, ioc_value) for
+            # IOC-bearing alerts. Partial index leaves NULL-ioc alerts (timeline /
+            # technique events, which are legitimately distinct) unconstrained.
+            # Wrapped because a pre-existing DB may still hold legacy duplicates;
+            # once the de-dup cleanup runs, the index creates cleanly on next start.
+            try:
+                cursor.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_unique_ioc "
+                    "ON alerts(alert_type, ioc_value) WHERE ioc_value IS NOT NULL"
+                )
+            except sqlite3.IntegrityError as e:
+                logger.warning(
+                    "Could not create unique alert index (legacy duplicate alerts "
+                    "present): %s. Run the alert de-duplication cleanup, then restart.", e
+                )
 
             conn.commit()
             conn.close()
@@ -1012,8 +1027,14 @@ class SQLiteStore:
     # --- Alerts (Real-Time Monitoring) ------------------------------------
 
     def store_alert(self, alert, conn=None):
-        """Insert one alert. details is JSON-encoded. Honours the conn=
-        convention for transaction() enlistment."""
+        """Insert one alert (idempotent). details is JSON-encoded. Honours the
+        conn= convention for transaction() enlistment.
+
+        Uses INSERT OR IGNORE against the partial unique index
+        idx_alerts_unique_ioc, so a second alert with the same
+        (alert_type, ioc_value) is silently skipped rather than duplicated.
+        NULL-ioc alerts (timeline / technique) are outside the partial index and
+        always insert. Returns 1 if a row was inserted, 0 if it was a duplicate."""
         import json
         managed = conn is None
         own_conn = None
@@ -1021,8 +1042,8 @@ class SQLiteStore:
             if managed:
                 own_conn = self.get_connection()
                 conn = own_conn
-            conn.execute("""
-            INSERT INTO alerts
+            cur = conn.execute("""
+            INSERT OR IGNORE INTO alerts
             (severity, alert_type, title, ioc_value, technique_id, source, upload_id, details)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
@@ -1037,10 +1058,12 @@ class SQLiteStore:
             ))
             if managed:
                 conn.commit()
+            return cur.rowcount  # 1 inserted, 0 ignored (duplicate)
         except Exception as e:
             logger.error("Error storing alert: %s", e)
             if not managed:
                 raise
+            return 0
         finally:
             if own_conn is not None:
                 own_conn.close()
