@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bell, Key, Users, Globe, Monitor, ToggleLeft, ToggleRight, Copy, RefreshCw, Check, UserPlus, X, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react'
+import { Users, UserPlus, X, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -7,36 +7,13 @@ import { toast } from 'sonner'
 import { register, ApiError } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 
-const settingsSections = [
-  { id: 'general', label: 'General', icon: Globe },
-  { id: 'users', label: 'Users', icon: Users },
-  { id: 'api', label: 'API Keys', icon: Key },
-  { id: 'notifications', label: 'Notifications', icon: Bell },
-  { id: 'appearance', label: 'Appearance', icon: Monitor },
-]
-
-const apiKeys = [
-  { name: 'Production API', key: 'srag_prod_••••••••••••X8f2', created: '2026-01-15', lastUsed: '2 min ago' },
-  { name: 'Development API', key: 'srag_dev_••••••••••••K3m9', created: '2026-03-22', lastUsed: '1 hr ago' },
-  { name: 'Integration API', key: 'srag_int_••••••••••••P7q4', created: '2026-05-10', lastUsed: '3 hr ago' },
-]
-
-const notificationSettings = [
-  { label: 'Critical Alerts', description: 'Immediate notifications for critical severity alerts', enabled: true },
-  { label: 'New Investigations', description: 'When a new investigation is created', enabled: true },
-  { label: 'Case Assignments', description: 'When a case is assigned to you', enabled: true },
-  { label: 'IOC Enrichment Complete', description: 'When IOC enrichment finishes', enabled: false },
-  { label: 'Daily Digest', description: 'Summary of daily activity', enabled: true },
-  { label: 'Weekly Report', description: 'Weekly threat landscape summary', enabled: false },
-]
-
+// Settings intentionally contains only what's backed by a real endpoint: ADMIN
+// user creation via POST /auth/register. The previous General / API Keys /
+// Notifications / Appearance sections were cosmetic (no persistence) and were
+// removed in the Phase B honesty pass rather than ship dead controls.
 export default function Settings() {
   const { role } = useAuth()
   const isAdmin = role === 'ADMIN'
-  const [activeSection, setActiveSection] = useState('general')
-  const [notifs, setNotifs] = useState(notificationSettings)
-  const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
-  const [density, setDensity] = useState('default')
 
   // Create-user modal (wired to the ADMIN-only POST /auth/register).
   const [showCreate, setShowCreate] = useState(false)
@@ -72,220 +49,47 @@ export default function Settings() {
     }
   }
 
-  const toggleNotif = (index: number) => {
-    setNotifs(prev => prev.map((n, i) => i === index ? { ...n, enabled: !n.enabled } : n))
-  }
-
-  const copyKey = (index: number) => {
-    setCopiedIndex(index)
-    setTimeout(() => setCopiedIndex(null), 2000)
-  }
-
   return (
-    <div className="p-8 max-w-[1400px] mx-auto h-full flex gap-6">
-      {/* Sidebar */}
-      <div className="w-56 shrink-0">
-        <nav className="space-y-0.5 sticky top-4">
-          {settingsSections.map(section => {
-            const Icon = section.icon
-            return (
-              <button
-                key={section.id}
-                onClick={() => setActiveSection(section.id)}
-                className={`flex items-center gap-3 w-full px-3 py-2 rounded-md text-sm transition-colors ${
-                  activeSection === section.id
-                    ? 'bg-sr-elevated text-sr-text font-medium'
-                    : 'text-sr-text-secondary hover:bg-sr-elevated hover:text-sr-text'
-                }`}
-              >
-                <Icon size={16} strokeWidth={1.5} />
-                {section.label}
-              </button>
-            )
-          })}
-        </nav>
+    <div className="mx-auto h-full max-w-[900px] p-8">
+      <div className="mb-6">
+        <h1 className="font-display text-xl font-bold text-sr-text">Settings</h1>
+        <p className="mt-1 text-sm text-sr-text-secondary">Account and user management.</p>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 min-w-0">
-        {/* General */}
-        {activeSection === 'general' && (
-          <div className="space-y-6">
-            <h2 className="text-lg font-semibold text-sr-text">General Settings</h2>
-            <div className="bg-sr-surface border border-sr-border rounded-lg p-6 card-shadow space-y-5">
-              <div>
-                <label className="block text-sm font-medium text-sr-text mb-2">Platform Name</label>
-                <input
-                  type="text"
-                  defaultValue="SecureRAG"
-                  className="w-full max-w-md px-3 py-2 bg-sr-elevated border border-sr-border rounded-md text-sm text-sr-text focus:border-sr-accent focus:outline-none transition-colors"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-sr-text mb-2">Timezone</label>
-                <select className="w-full max-w-md px-3 py-2 bg-sr-elevated border border-sr-border rounded-md text-sm text-sr-text focus:border-sr-accent focus:outline-none">
-                  <option>UTC (Coordinated Universal Time)</option>
-                  <option>America/New_York (EST/EDT)</option>
-                  <option>Europe/London (GMT/BST)</option>
-                  <option>Asia/Tokyo (JST)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-sr-text mb-2">Date Format</label>
-                <select className="w-full max-w-md px-3 py-2 bg-sr-elevated border border-sr-border rounded-md text-sm text-sr-text focus:border-sr-accent focus:outline-none">
-                  <option>YYYY-MM-DD</option>
-                  <option>MM/DD/YYYY</option>
-                  <option>DD/MM/YYYY</option>
-                </select>
-              </div>
-            </div>
+      {/* Users — the only real settings surface */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-base font-semibold text-sr-text">
+            <Users size={16} className="text-sr-accent" /> Users
+          </h2>
+          <button
+            onClick={() => { setCuError(''); setShowCreate(true) }}
+            disabled={!isAdmin}
+            title={isAdmin ? undefined : 'Only ADMIN can create users'}
+            className="flex items-center gap-1.5 rounded-md bg-sr-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sr-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <UserPlus size={14} /> Add User
+          </button>
+        </div>
+
+        {!isAdmin && (
+          <div className="flex items-center gap-2 rounded-lg border border-sr-yellow/30 bg-sr-yellow/10 px-4 py-3 text-sm text-sr-yellow">
+            <ShieldAlert size={15} className="shrink-0" />
+            User management requires an ADMIN session. You're signed in as {role || 'a non-admin role'}.
           </div>
         )}
 
-        {/* Users */}
-        {activeSection === 'users' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-sr-text">Users</h2>
-              <button
-                onClick={() => { setCuError(''); setShowCreate(true) }}
-                disabled={!isAdmin}
-                title={isAdmin ? undefined : 'Only ADMIN can create users'}
-                className="flex items-center gap-1.5 px-4 py-2 bg-sr-accent text-white rounded-md text-sm font-medium hover:bg-sr-accent-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <UserPlus size={14} /> Add User
-              </button>
-            </div>
-
-            {!isAdmin && (
-              <div className="flex items-center gap-2 rounded-lg border border-sr-yellow/30 bg-sr-yellow/10 px-4 py-3 text-sm text-sr-yellow">
-                <ShieldAlert size={15} className="shrink-0" />
-                User management requires an ADMIN session. You're signed in as {role || 'a non-admin role'}.
-              </div>
-            )}
-
-            {/* No GET /users endpoint exists in the backend, so we don't fabricate a
-                directory. Created users authenticate via /auth/login. */}
-            <div className="bg-sr-surface border border-sr-border rounded-lg card-shadow p-6 text-sm text-sr-text-secondary">
-              <Users size={18} className="text-sr-text-tertiary mb-2" />
-              <p>The backend has no user-directory endpoint, so existing users aren't listed here.</p>
-              <p className="mt-1 text-sr-text-tertiary">
-                {isAdmin
-                  ? 'Use “Add User” to create an account (ADMIN/ANALYST/VIEWER). New users sign in from the login screen.'
-                  : 'Ask an ADMIN to create accounts.'}
-              </p>
-            </div>
-
-          </div>
-        )}
-
-        {/* API Keys */}
-        {activeSection === 'api' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-sr-text">API Keys</h2>
-              <button className="px-4 py-2 bg-sr-accent text-sr-text rounded-md text-sm font-medium hover:bg-sr-accent-hover transition-colors">
-                + Generate Key
-              </button>
-            </div>
-            <div className="space-y-3">
-              {apiKeys.map((api, i) => (
-                <div key={api.name} className="bg-sr-surface border border-sr-border rounded-lg p-5 card-shadow">
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <div className="text-sm font-medium text-sr-text">{api.name}</div>
-                      <div className="text-[11px] text-sr-text-tertiary mt-0.5">Created: {api.created}</div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => copyKey(i)}
-                        className="p-1.5 rounded hover:bg-sr-elevated text-sr-text-tertiary hover:text-sr-text transition-colors"
-                      >
-                        {copiedIndex === i ? <Check size={14} className="text-sr-green" /> : <Copy size={14} />}
-                      </button>
-                      <button className="p-1.5 rounded hover:bg-sr-elevated text-sr-text-tertiary hover:text-sr-text transition-colors">
-                        <RefreshCw size={14} />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <code className="flex-1 px-3 py-2 bg-sr-elevated rounded border border-sr-border text-xs font-mono text-sr-text-secondary">
-                      {api.key}
-                    </code>
-                    <span className="text-[11px] text-sr-text-tertiary">Last used: {api.lastUsed}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Notifications */}
-        {activeSection === 'notifications' && (
-          <div className="space-y-6">
-            <h2 className="text-lg font-semibold text-sr-text">Notification Preferences</h2>
-            <div className="bg-sr-surface border border-sr-border rounded-lg card-shadow divide-y divide-sr-border">
-              {notifs.map((notif, i) => (
-                <div key={notif.label} className="flex items-center justify-between px-5 py-4">
-                  <div>
-                    <div className="text-sm font-medium text-sr-text">{notif.label}</div>
-                    <div className="text-[11px] text-sr-text-secondary mt-0.5">{notif.description}</div>
-                  </div>
-                  <button
-                    onClick={() => toggleNotif(i)}
-                    className="shrink-0"
-                  >
-                    {notif.enabled ? (
-                      <ToggleRight size={24} className="text-sr-accent" />
-                    ) : (
-                      <ToggleLeft size={24} className="text-sr-text-tertiary" />
-                    )}
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Appearance */}
-        {activeSection === 'appearance' && (
-          <div className="space-y-6">
-            <h2 className="text-lg font-semibold text-sr-text">Appearance</h2>
-            <div className="bg-sr-surface border border-sr-border rounded-lg p-6 card-shadow space-y-5">
-              <div>
-                <label className="block text-sm font-medium text-sr-text mb-3">Theme</label>
-                <div className="flex gap-3">
-                  <button className="flex-1 max-w-[140px] p-4 bg-sr-elevated border-2 border-sr-accent rounded-lg text-center">
-                    <div className="w-full h-8 bg-sr-bg rounded border border-sr-border mb-2" />
-                    <span className="text-xs text-sr-text font-medium">Dark</span>
-                  </button>
-                  <button className="flex-1 max-w-[140px] p-4 bg-sr-elevated border-2 border-sr-border rounded-lg text-center opacity-50 cursor-not-allowed">
-                    <div className="w-full h-8 bg-gray-100 rounded border border-gray-300 mb-2" />
-                    <span className="text-xs text-sr-text-secondary font-medium">Light</span>
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-sr-text mb-3">Density</label>
-                <div className="flex gap-2">
-                  {['compact', 'default', 'relaxed'].map(d => (
-                    <button
-                      key={d}
-                      onClick={() => setDensity(d)}
-                      className={`px-4 py-2 rounded-md text-xs font-medium capitalize transition-colors ${
-                        density === d
-                          ? 'bg-sr-accent text-sr-text'
-                          : 'bg-sr-elevated border border-sr-border text-sr-text-secondary hover:text-sr-text'
-                      }`}
-                    >
-                      {d}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* No GET /users endpoint exists in the backend, so we don't fabricate a
+            directory. Created users authenticate via /auth/login. */}
+        <div className="rounded-lg border border-sr-border bg-sr-surface p-6 text-sm text-sr-text-secondary card-shadow">
+          <Users size={18} className="mb-2 text-sr-text-tertiary" />
+          <p>The backend has no user-directory endpoint, so existing users aren't listed here.</p>
+          <p className="mt-1 text-sr-text-tertiary">
+            {isAdmin
+              ? 'Use “Add User” to create an account (ADMIN/ANALYST/VIEWER). New users sign in from the login screen.'
+              : 'Ask an ADMIN to create accounts.'}
+          </p>
+        </div>
       </div>
 
       {/* Create User modal (ADMIN-only; POST /auth/register) */}

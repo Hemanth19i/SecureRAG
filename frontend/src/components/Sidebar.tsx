@@ -18,6 +18,7 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
+  type LucideIcon,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 
@@ -36,9 +37,11 @@ const navItems = [
   { label: 'Live Monitoring', icon: Activity, path: '/monitoring' },
 ]
 
-const bottomItems = [
+// Settings is an in-app route; Help opens the project repo in a new tab (it was
+// a dead '#' link before the Phase B honesty pass).
+const bottomItems: { label: string; icon: LucideIcon; path?: string; href?: string }[] = [
   { label: 'Settings', icon: Settings, path: '/settings' },
-  { label: 'Help', icon: HelpCircle, path: '#' },
+  { label: 'Help', icon: HelpCircle, href: 'https://github.com/Hemanth19i/SecureRAG' },
 ]
 
 interface SidebarProps {
@@ -123,12 +126,32 @@ export default function Sidebar({ currentPage, onPageChange }: SidebarProps) {
       {/* Bottom section */}
       <div className="px-2 pb-3 space-y-0.5 border-t border-sr-border pt-3 shrink-0">
         {bottomItems.map((item) => {
-          const isActive = currentPage === item.label
           const Icon = item.icon
+          // External docs link (Help) — a real anchor opening in a new tab.
+          if (item.href) {
+            return (
+              <a
+                key={item.label}
+                href={item.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`
+                  flex items-center w-full gap-3 px-3 py-2 rounded-md text-sm font-medium transition-all duration-150
+                  text-sr-text-secondary hover:bg-sr-elevated hover:text-sr-text border-l-[3px] border-transparent
+                  ${collapsed ? 'justify-center' : ''}
+                `}
+                title={collapsed ? item.label : undefined}
+              >
+                <Icon size={18} strokeWidth={1.5} className="shrink-0" />
+                {!collapsed && <span className="truncate">{item.label}</span>}
+              </a>
+            )
+          }
+          const isActive = currentPage === item.label
           return (
             <button
               key={item.label}
-              onClick={() => item.path !== '#' && navigate(item.path)}
+              onClick={() => item.path && navigate(item.path)}
               className={`
                 flex items-center w-full gap-3 px-3 py-2 rounded-md text-sm font-medium transition-all duration-150
                 ${isActive
