@@ -107,6 +107,34 @@ export function clearSession() {
   window.dispatchEvent(new CustomEvent(AUTH_EVENT, { detail: "" }));
 }
 
+// Distinguish an involuntary session teardown (expired/invalid token, refresh
+// failed) from a deliberate logout. Set just before clearSession() in the
+// refresh-failure paths; the login screen reads it to show a "session expired"
+// banner, and login() clears it. sessionStorage so it doesn't outlive the tab.
+const EXPIRED_KEY = "srag_session_expired";
+function expireSession() {
+  try {
+    sessionStorage.setItem(EXPIRED_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+  clearSession();
+}
+export function wasSessionExpired(): boolean {
+  try {
+    return sessionStorage.getItem(EXPIRED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function clearSessionExpired() {
+  try {
+    sessionStorage.removeItem(EXPIRED_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 /* ---------------------------------------------------------- single-flight refresh */
 
 let refreshPromise: Promise<string | null> | null = null;
@@ -161,7 +189,7 @@ async function apiFetch<T>(path: string, { method = "GET", body }: FetchOpts = {
       setAccessToken(newToken);
       res = await doFetch(newToken);
     } else {
-      clearSession();
+      expireSession();
     }
   }
 
@@ -189,6 +217,7 @@ export async function login(username: string, password: string): Promise<LoginRe
     body: { username, password },
   });
   persistSession(data, username);
+  clearSessionExpired(); // a successful login dismisses any "session expired" notice
   // Notify listeners with the fresh token so the app re-renders authenticated.
   window.dispatchEvent(new CustomEvent(AUTH_EVENT, { detail: data.access_token }));
   return data;
@@ -370,7 +399,7 @@ export async function uploadLog(
       setAccessToken(newToken);
       res = await doUpload(newToken);
     } else {
-      clearSession();
+      expireSession();
     }
   }
 

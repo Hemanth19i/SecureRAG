@@ -15,8 +15,7 @@ import {
   Activity,
   Settings,
   HelpCircle,
-  ChevronLeft,
-  ChevronRight,
+  PanelLeftClose,
   LogOut,
   type LucideIcon,
 } from 'lucide-react'
@@ -32,7 +31,7 @@ const navItems = [
   { label: 'Timeline', icon: Clock, path: '/timeline' },
   { label: 'Attack Graph', icon: Share2, path: '/attack-graph' },
   { label: 'Case Management', icon: FolderOpen, path: '/cases' },
-  { label: 'Threat Intelligence', icon: Shield, path: '/threat-intel' },
+  { label: 'IOC Enrichment', icon: Shield, path: '/ioc-enrichment' },
   { label: 'Reports', icon: FileText, path: '/reports' },
   { label: 'Live Monitoring', icon: Activity, path: '/monitoring' },
 ]
@@ -53,7 +52,16 @@ export default function Sidebar({ currentPage, onPageChange }: SidebarProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const { username, role, logout } = useAuth()
-  const [collapsed, setCollapsed] = useState(false)
+  // Persisted across reloads/navigation; Sidebar stays mounted across routes.
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('srag_sidebar_collapsed') === '1' } catch { return false }
+  })
+  const toggleCollapsed = () =>
+    setCollapsed((c) => {
+      const next = !c
+      try { localStorage.setItem('srag_sidebar_collapsed', next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
 
   const initials = (username || 'user').slice(0, 2).toUpperCase()
   const roleLabel = role ? role.charAt(0) + role.slice(1).toLowerCase() : 'Analyst'
@@ -77,22 +85,45 @@ export default function Sidebar({ currentPage, onPageChange }: SidebarProps) {
       className="flex flex-col h-full bg-sr-surface border-r border-sr-border transition-all duration-300 ease-out select-none"
       style={{ width: collapsed ? 64 : 240 }}
     >
-      {/* Logo */}
-      <div className="flex items-center h-14 px-4 border-b border-sr-border shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="relative flex items-center justify-center w-8 h-8 shrink-0">
+      {/* Logo + collapse toggle */}
+      <div className={`flex items-center h-14 border-b border-sr-border shrink-0 ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
+        {collapsed ? (
+          // Collapsed: the SR mark doubles as the expand control.
+          <button
+            onClick={toggleCollapsed}
+            title="Expand sidebar"
+            aria-label="Expand sidebar"
+            className="relative flex h-8 w-8 items-center justify-center rounded-md hover:bg-sr-elevated transition-colors"
+          >
             <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M14 2L3 7.5V14.5C3 20.5 7.8 26.1 14 27.5C20.2 26.1 25 20.5 25 14.5V7.5L14 2Z" stroke="#FF7A00" strokeWidth="1.5" fill="none"/>
               <text x="14" y="17" textAnchor="middle" fill="#FF7A00" fontSize="9" fontWeight="700" fontFamily="Space Grotesk">SR</text>
             </svg>
-            <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sr-accent" />
-          </div>
-          {!collapsed && (
-            <span className="font-display font-bold text-sr-text text-base tracking-tight truncate">
-              SecureRAG
-            </span>
-          )}
-        </div>
+          </button>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="relative flex items-center justify-center w-8 h-8 shrink-0">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M14 2L3 7.5V14.5C3 20.5 7.8 26.1 14 27.5C20.2 26.1 25 20.5 25 14.5V7.5L14 2Z" stroke="#FF7A00" strokeWidth="1.5" fill="none"/>
+                  <text x="14" y="17" textAnchor="middle" fill="#FF7A00" fontSize="9" fontWeight="700" fontFamily="Space Grotesk">SR</text>
+                </svg>
+                <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sr-accent" />
+              </div>
+              <span className="font-display font-bold text-sr-text text-base tracking-tight truncate">
+                SecureRAG
+              </span>
+            </div>
+            <button
+              onClick={toggleCollapsed}
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+              className="rounded-md p-1.5 text-sr-text-tertiary hover:bg-sr-elevated hover:text-sr-text transition-colors"
+            >
+              <PanelLeftClose size={16} strokeWidth={1.5} />
+            </button>
+          </>
+        )}
       </div>
 
       {/* Navigation */}
@@ -201,14 +232,6 @@ export default function Sidebar({ currentPage, onPageChange }: SidebarProps) {
           </div>
         )}
       </div>
-
-      {/* Collapse toggle */}
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="absolute -right-3 top-16 w-6 h-6 rounded-full bg-sr-elevated border border-sr-border flex items-center justify-center text-sr-text-tertiary hover:text-sr-text transition-colors z-10"
-      >
-        {collapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
-      </button>
     </aside>
   )
 }

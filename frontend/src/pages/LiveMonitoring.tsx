@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Activity, AlertTriangle, Wifi, Database, Fingerprint, Loader2, Check } from 'lucide-react'
+import { Activity, AlertTriangle, Wifi, WifiOff, Database, Fingerprint, Loader2, Check, RefreshCw } from 'lucide-react'
 import { fetchAlerts, ackAlert, fetchStats } from '@/lib/api'
 import type { AlertRow } from '@/lib/backend'
 import { normSeverity, sevHex } from '@/lib/format'
@@ -10,31 +10,51 @@ export default function LiveMonitoring() {
   const [alerts, setAlerts] = useState<AlertRow[]>([])
   const [readouts, setReadouts] = useState<Record<string, number>>({})
   const [state, setState] = useState<'connecting' | 'live' | 'offline'>('connecting')
-  const [lastRefresh, setLastRefresh] = useState<string>('')
+  // Real poll-cycle telemetry (no fabricated metrics):
+  const [nowMs, setNowMs] = useState(() => Date.now())   // 1s ticker → drives the countdown/ago display
+  const [lastPollAt, setLastPollAt] = useState<number | null>(null)   // anchors "next refresh in Ns"
+  const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null) // anchors "updated Ns ago"
+  const [flashIds, setFlashIds] = useState<Set<number>>(new Set())    // genuinely-new alert_ids to highlight
   const cursorRef = useRef(0)
+  const firstLoadRef = useRef(true)
+  const flashTimer = useRef<number | null>(null)
 
   const poll = useCallback(() => {
+    setLastPollAt(Date.now())
     fetchAlerts(cursorRef.current, 50).then(
       (data) => {
         const fresh = data.alerts || []
         if (fresh.length) {
           setAlerts((prev) => [...fresh, ...prev].slice(0, 100))
           if (data.cursor) cursorRef.current = data.cursor
+          // Highlight only alerts that are genuinely new this cycle — never on the
+          // first load (cursor 0 returns everything), and existing rows never re-flash
+          // because the cursor only returns alert_id > cursor.
+          if (!firstLoadRef.current) {
+            const ids = new Set(fresh.map((a) => a.alert_id))
+            setFlashIds(ids)
+            if (flashTimer.current) clearTimeout(flashTimer.current)
+            flashTimer.current = window.setTimeout(() => setFlashIds(new Set()), 2500)
+          }
         }
+        firstLoadRef.current = false
         setState('live')
-        setLastRefresh(new Date().toLocaleTimeString())
+        setLastSuccessAt(Date.now())
       },
-      () => setState('offline'),
+      () => setState('offline'), // failed poll → degraded; recovery flips back to 'live'
     )
   }, [])
 
   useEffect(() => {
     fetchStats().then((s) => setReadouts(s.readouts || {}), () => {})
     poll()
-    const id = setInterval(() => {
-      if (!document.hidden) poll()
-    }, POLL_MS)
-    return () => clearInterval(id)
+    const pollId = setInterval(() => { if (!document.hidden) poll() }, POLL_MS)
+    const tickId = setInterval(() => setNowMs(Date.now()), 1000) // re-render once a second
+    return () => {
+      clearInterval(pollId)
+      clearInterval(tickId)
+      if (flashTimer.current) clearTimeout(flashTimer.current)
+    }
   }, [poll])
 
   const ack = (id: number) => {
@@ -45,6 +65,14 @@ export default function LiveMonitoring() {
   }
 
   const unacked = alerts.filter((a) => !a.acknowledged).length
+  const agoSec = lastSuccessAt != null ? Math.max(0, Math.floor((nowMs - lastSuccessAt) / 1000)) : null
+  const nextInSec = lastPollAt != null ? Math.max(0, Math.ceil((lastPollAt + POLL_MS - nowMs) / 1000)) : null
+
+  const conn = state === 'live'
+    ? { Icon: Wifi, color: '#22C55E', label: 'Connected' }
+    : state === 'offline'
+      ? { Icon: WifiOff, color: '#EF4444', label: 'Connection lost — retrying' }
+      : { Icon: Loader2, color: '#8A8A8A', label: 'Connecting…' }
 
   const metrics = [
     { icon: AlertTriangle, color: '#EF4444', label: 'Unacked Alerts', value: unacked },
@@ -55,17 +83,21 @@ export default function LiveMonitoring() {
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-6 p-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Wifi size={16} className={state === 'live' ? 'text-sr-green animate-pulse-dot' : 'text-sr-text-tertiary'} />
+          <conn.Icon size={16} style={{ color: conn.color }} className={state === 'connecting' ? 'animate-spin' : state === 'live' ? 'animate-pulse-dot' : ''} />
           <h2 className="font-display text-xl font-bold text-sr-text">Live Monitoring</h2>
-          <span className={`text-[11px] font-mono uppercase ${state === 'live' ? 'text-sr-green' : state === 'offline' ? 'text-sr-red' : 'text-sr-text-tertiary'}`}>
-            {state}
-          </span>
+          <span className="text-[11px] font-mono uppercase tracking-wider" style={{ color: conn.color }}>{conn.label}</span>
         </div>
-        <span className="font-mono text-[11px] text-sr-text-tertiary">
-          {lastRefresh ? `last refresh ${lastRefresh}` : '…'} · polling {POLL_MS / 1000}s
-        </span>
+        <div className="flex items-center gap-3 font-mono text-[11px] text-sr-text-tertiary">
+          {agoSec != null && (
+            <span>updated {agoSec === 0 ? 'just now' : `${agoSec}s ago`}</span>
+          )}
+          {state !== 'offline' && nextInSec != null && (
+            <span className="flex items-center gap-1"><RefreshCw size={11} /> next refresh in {nextInSec}s</span>
+          )}
+          <span className="text-sr-text-tertiary/70">· polling every {POLL_MS / 1000}s</span>
+        </div>
       </div>
 
       {/* Metrics */}
@@ -100,11 +132,13 @@ export default function LiveMonitoring() {
             <tbody className="divide-y divide-sr-border">
               {alerts.map((a) => {
                 const c = sevHex(normSeverity(a.severity))
+                const isNew = flashIds.has(a.alert_id)
                 return (
-                  <tr key={a.alert_id} className={a.acknowledged ? 'opacity-50' : ''}>
-                    <td className="px-5 py-3">
-                      <span className="h-2 w-2 rounded-full" style={{ background: c, display: 'inline-block' }} />
-                    </td>
+                  <tr
+                    key={a.alert_id}
+                    className={`transition-colors duration-1000 ${isNew ? 'bg-sr-accent/15' : ''} ${a.acknowledged ? 'opacity-50' : ''}`}
+                  >
+                    <td className="px-5 py-3"><span className="h-2 w-2 rounded-full" style={{ background: c, display: 'inline-block' }} /></td>
                     <td className="px-2 py-3"><span className="font-mono text-[11px] uppercase" style={{ color: c }}>{String(a.severity || '').toLowerCase()}</span></td>
                     <td className="px-2 py-3 font-mono text-[11px] text-sr-text-secondary">{a.alert_type}</td>
                     <td className="px-2 py-3 text-sm text-sr-text">{a.title}</td>

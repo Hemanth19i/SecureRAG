@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router'
+import { Routes, Route, Navigate } from 'react-router'
 import { useState } from 'react'
 import Sidebar from '@/components/Sidebar'
 import TopBar from '@/components/TopBar'
@@ -41,7 +41,9 @@ export default function App() {
             <Route path="/timeline" element={<TimelineAnalysis />} />
             <Route path="/attack-graph" element={<AttackGraph />} />
             <Route path="/cases" element={<CaseManagement />} />
-            <Route path="/threat-intel" element={<ThreatIntelligence />} />
+            <Route path="/ioc-enrichment" element={<ThreatIntelligence />} />
+            {/* Backward-compat: old route redirects to the renamed one (no 404s). */}
+            <Route path="/threat-intel" element={<Navigate to="/ioc-enrichment" replace />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/monitoring" element={<LiveMonitoring />} />
