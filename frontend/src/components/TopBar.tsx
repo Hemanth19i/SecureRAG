@@ -1,8 +1,12 @@
+import { useAuth } from '@/lib/auth'
+
 interface TopBarProps {
   pageTitle: string
 }
 
 export default function TopBar({ pageTitle }: TopBarProps) {
+  const { username, role } = useAuth()
+
   return (
     <header className="flex items-center justify-between h-14 px-6 bg-sr-bg/80 backdrop-blur-xl border-b border-sr-border sticky top-0 z-40">
       {/* Left: Breadcrumb + Title */}
@@ -17,14 +21,25 @@ export default function TopBar({ pageTitle }: TopBarProps) {
         </h1>
       </div>
 
-      {/* Right: live status (Search ⌘K and the notifications bell were removed in
-          the Phase B honesty pass — neither had a handler or a backing feature). */}
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-sr-surface border border-sr-border">
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sr-green opacity-75" />
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-sr-green" />
-        </span>
-        <span className="text-xs font-medium text-sr-text-secondary">Live</span>
+      {/* Right: current user/role + live status */}
+      <div className="flex items-center gap-2">
+        {username && (
+          <div className="flex items-center gap-2 rounded-md border border-sr-border bg-sr-surface px-3 py-1.5">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sr-accent/20 font-mono text-[10px] font-medium text-sr-accent">
+              {username.slice(0, 2).toUpperCase()}
+            </span>
+            <span className="text-xs font-medium text-sr-text">{username}</span>
+            {role && <span className="font-mono text-[10px] uppercase tracking-wider text-sr-text-tertiary">· {role}</span>}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-sr-surface border border-sr-border">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sr-green opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-sr-green" />
+          </span>
+          <span className="text-xs font-medium text-sr-text-secondary">Live</span>
+        </div>
       </div>
     </header>
   )

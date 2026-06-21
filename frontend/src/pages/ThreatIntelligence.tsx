@@ -42,7 +42,7 @@ export default function ThreatIntelligence() {
       <div className="mb-6">
         <div className="flex items-center gap-2">
           <ShieldAlert size={18} className="text-sr-accent" />
-          <h2 className="font-display text-xl font-bold text-sr-text">Threat Intelligence</h2>
+          <h2 className="font-display text-xl font-bold text-sr-text">IOC Enrichment</h2>
         </div>
         <p className="mt-1 text-sm text-sr-text-secondary">
           Look up an indicator's reputation via the threat-intel provider (public IPs supported).
