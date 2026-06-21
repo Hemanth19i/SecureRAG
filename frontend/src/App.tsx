@@ -6,6 +6,7 @@ import LoginScreen from '@/components/LoginScreen'
 import { useAuth } from '@/lib/auth'
 import Dashboard from '@/pages/Dashboard'
 import Query from '@/pages/Query'
+import RetrievalEval from '@/pages/RetrievalEval'
 import Upload from '@/pages/Upload'
 import Investigations from '@/pages/Investigations'
 import IOCExplorer from '@/pages/IOCExplorer'
@@ -34,6 +35,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/query" element={<Query />} />
+            <Route path="/retrieval-eval" element={<RetrievalEval />} />
             <Route path="/upload" element={<Upload />} />
             <Route path="/investigations" element={<Investigations />} />
             <Route path="/ioc-explorer" element={<IOCExplorer />} />

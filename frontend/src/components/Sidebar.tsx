@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import {
   LayoutDashboard,
   Sparkles,
+  Gauge,
   UploadCloud,
   Search,
   Globe,
@@ -24,6 +25,7 @@ import { useAuth } from '@/lib/auth'
 const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, path: '/' },
   { label: 'AI Investigation', icon: Sparkles, path: '/query' },
+  { label: 'RAG Evaluation', icon: Gauge, path: '/retrieval-eval' },
   { label: 'Ingest Logs', icon: UploadCloud, path: '/upload' },
   { label: 'Investigations', icon: Search, path: '/investigations' },
   { label: 'IOC Explorer', icon: Globe, path: '/ioc-explorer' },

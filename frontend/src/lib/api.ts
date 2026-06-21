@@ -9,6 +9,7 @@
 import type {
   LoginResponse,
   QueryResponse,
+  RetrievalEvalResponse,
   Correlation,
   Enrichment,
   StatsResponse,
@@ -245,6 +246,15 @@ export async function register(
 
 export function fetchQuery(query: string, topK?: number): Promise<QueryResponse> {
   return apiFetch<QueryResponse>("/query", {
+    method: "POST",
+    body: topK ? { query, top_k: topK } : { query },
+  });
+}
+
+// POST /retrieval/eval -> retrieval-only instrumentation (ranked chunks +
+// per-stage latency). Isolates the RAG retrieval step; no LLM/IOC analysis.
+export function fetchRetrievalEval(query: string, topK?: number): Promise<RetrievalEvalResponse> {
+  return apiFetch<RetrievalEvalResponse>("/retrieval/eval", {
     method: "POST",
     body: topK ? { query, top_k: topK } : { query },
   });
