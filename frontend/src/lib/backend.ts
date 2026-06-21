@@ -106,6 +106,36 @@ export interface QueryResponse {
   query: string;
 }
 
+// --- POST /retrieval/eval — retrieval-only instrumentation ---
+// Embeds the query, runs vector search against the LIVE store, and returns the
+// ranked chunks + per-stage latency. It deliberately skips IOC/MITRE/LLM
+// analysis so it isolates the RAG retrieval step. `recall_at_k` is a
+// forward-compat hook the endpoint currently always returns as null (the live
+// store has no ground-truth labels — Recall@K/MRR are measured offline; see
+// server/eval/recall_eval.py and the benchmark table in README.md).
+export interface RetrievalEvalResult {
+  rank: number;
+  similarity: number | null; // 1/(1+distance), 0..1; null if distance missing
+  distance: number | null; // ChromaDB L2 distance
+  source_file: string | null;
+  upload_id: string | null;
+  chunk_id: string | null;
+  evidence: string; // full chunk text
+}
+
+export interface RetrievalEvalResponse {
+  query: string;
+  top_k: number;
+  count: number;
+  results: RetrievalEvalResult[];
+  latency_ms: {
+    embed: number;
+    search: number;
+    total: number;
+  };
+  recall_at_k: null; // always null today — not computed by the live endpoint
+}
+
 // --- GET /stats ---
 export interface EvidenceRow {
   upload_id: string;
