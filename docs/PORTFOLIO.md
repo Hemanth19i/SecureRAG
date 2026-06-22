@@ -27,15 +27,21 @@ retrieved evidence rather than letting it hallucinate.
 - **Attack timeline & graph** — chronological and relationship views.
 - **Case management** with lifecycle and notes.
 - **Threat-intel enrichment** (AbuseIPDB) with cache-first TTL.
-- **Real-time monitoring** — alert generation, acknowledge lifecycle, live feed.
-- **Retrieval evaluation dashboard** — similarity scores, source evidence, and
-  per-stage latency to measure RAG quality.
+- **Real-time monitoring** — alert generation, acknowledge lifecycle, severity/acked
+  filters, live feed.
+- **Case management** with an append-only audit trail.
+- **RAG Evaluation page** — per-stage latency + ranked chunks (live), plus the
+  offline Recall@K / MRR benchmark, to measure retrieval quality honestly.
+- **Dashboard analytics** — real-data IOC-type and alert-type distributions with
+  command-center drill-ins.
 
 ## Tech stack
 - **Backend:** Python, Flask (blueprints), Flask-JWT-Extended, SQLite (WAL),
   ChromaDB, SentenceTransformers (`all-MiniLM-L6-v2`), Google Gemini.
-- **Frontend:** React 19, Vite, React Flow (graph), Framer Motion.
-- **Infra:** Waitress/gunicorn WSGI, Docker + Docker Compose, nginx.
+- **Frontend:** React 19 + TypeScript, Vite, Tailwind CSS + shadcn/ui, React Flow
+  (`@xyflow/react`, graph), Recharts (charts), three.js (hero).
+- **Infra:** Waitress/gunicorn WSGI, Docker + Docker Compose, nginx; CI via GitHub
+  Actions (ruff + pytest).
 
 ## Engineering highlights
 - **Grounded LLM design** — structured context with explicit untrusted-input
@@ -53,11 +59,15 @@ retrieved evidence rather than letting it hallucinate.
   production WSGI server, including graceful third-party-outage handling.
 
 ## Scale of the work
-15 production-hardening commits across security, reliability, deployment, and
-documentation; 12 SQLite tables; ~20 REST endpoints; full Docker deployment.
+Production-hardening across security, reliability, deployment, and documentation,
+plus phased frontend work (case audit trail, attack graph, RAG evaluation, dashboard
+analytics); 15 SQLite tables; 24 REST endpoints; CI on every PR; full Docker
+deployment.
 
 ## Screenshots
-See `docs/screenshots/` (dashboard, investigation, attack graph, cases, alerts).
+See `docs/screenshots/` (dashboard, AI investigation, IOC explorer, MITRE, timeline,
+attack graph, case management, live monitoring, RAG evaluation) — capture checklist
+in [docs/screenshots/README.md](screenshots/README.md).
 
 ## What it demonstrates
 Full-stack engineering, applied GenAI/RAG, security-domain modeling, API design,

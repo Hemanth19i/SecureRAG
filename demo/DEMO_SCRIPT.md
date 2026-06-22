@@ -5,8 +5,8 @@ bundled sample logs in [`sample_logs/`](sample_logs/).
 
 ## 0. Prerequisites
 
-- Backend running on `http://localhost:5000`, frontend on `http://localhost:5173`
-  (see the root [README](../README.md) → Setup).
+- Backend running on `http://localhost:5000`, frontend on `http://localhost:3000`
+  (see the root [README](../README.md) → Installation).
 - Log in as `admin` (password printed once at first backend start, or set via
   `DEFAULT_ADMIN_PASSWORD`).
 
@@ -70,13 +70,15 @@ Set status `IN_PROGRESS`, add an investigation note. Re-open to confirm it persi
 In the ALERT STREAM, click **ACK** on an alert. **Expected:** the row dims, the
 UNACKED count drops, and the state persists across a page refresh.
 
-## 8. RAG Eval (RAG EVAL view)
+## 8. RAG Evaluation (RAG EVALUATION view)
 
-Enter a query (e.g. *"brute force ssh login"*), set TOP_K = 5, click **RETRIEVE**.
+Enter a query (e.g. *"brute force ssh login"*), set `top_k` = 5, click
+**Run evaluation**.
 
 **Expected:** per-stage latency (embed / search / total ms) and a ranked table of
 retrieved chunks with similarity, distance, source file, and evidence — isolating
-the retrieval step from analysis.
+the retrieval step from analysis. The page also shows the offline Recall@K / MRR
+benchmark, clearly labeled as a benchmark (not a live measurement).
 
 ## 9. Live ingestion (API)
 

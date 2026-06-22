@@ -1,48 +1,49 @@
 # SecureRAG v1.0
 
+> Paste-ready text for the GitHub Release. The full, maintained notes (features,
+> security, per-phase changelog, limitations, roadmap) live in
+> **[RELEASE_NOTES_v1.0.md](RELEASE_NOTES_v1.0.md)**.
+
 **AI-powered threat-intelligence & SIEM platform** — turn raw security logs into
 analyst-ready intelligence: RAG retrieval, IOC extraction & correlation, MITRE
-ATT&CK mapping, attack timelines & graphs, case management, threat-intel
-enrichment, real-time alerting, and a retrieval-evaluation dashboard.
+ATT&CK mapping, attack timelines & graphs, case management with an audit trail,
+threat-intel enrichment, a RAG-evaluation page, real-data dashboard analytics, and
+real-time alerting.
 
-> First production release. Flask + React, JWT-secured, Docker-deployable.
+> First complete release. Flask + React (TypeScript), JWT-secured, CI on every PR,
+> Docker-deployable.
 
 ## Highlights
 - **End-to-end analysis pipeline:** upload → chunk → embed (ChromaDB) →
-  IOC/MITRE/timeline (SQLite) → correlation → alerts, shared by file upload and
-  a live monitoring feed.
+  IOC/MITRE/timeline (SQLite) → correlation → alerts, shared by file upload and a
+  live monitoring feed.
 - **AI investigation** via Google Gemini with a deterministic rule-based fallback.
-- **Real-time monitoring:** alert generation, acknowledge lifecycle, live polling.
-- **Retrieval Evaluation Dashboard:** similarity scores, source evidence, and
-  per-stage latency for the RAG step.
-- **Production-hardened:** fail-closed JWT secret, generic error responses, input
-  validation, SQLite busy-timeout, deployment-ready CORS, Waitress/gunicorn WSGI,
-  and Docker Compose with persistent storage.
+- **Case management** with an append-only audit trail.
+- **Real-time monitoring:** alert generation, acknowledge lifecycle, severity/acked
+  filters, cursor-based polling.
+- **RAG Evaluation page:** live per-stage latency + ranked chunks, plus the offline
+  Recall@K / MRR benchmark (clearly labeled, not live).
+- **Dashboard analytics:** real-data IOC-type and alert-type distributions with
+  command-center drill-ins.
+- **Hardened:** fail-closed JWT secret, generic errors, input validation, SQLite
+  busy-timeout, deployment-ready CORS, Waitress/gunicorn WSGI, Docker Compose, CI.
 
 ## Install
 ```bash
 git clone <repo> && cd SecureRAG
 # Backend
 cd server && python -m venv venv && pip install -r requirements.txt
-cp .env.example .env   # set a strong JWT_SECRET_KEY (and GEMINI_API_KEY)
+cp .env.example .env   # set a strong JWT_SECRET_KEY (and optionally GEMINI_API_KEY)
 python run_production.py
 # Frontend
 cd ../frontend && npm install && npm run build
 ```
 Or `docker compose up`. See [DEPLOYMENT.md](DEPLOYMENT.md).
 
-## Quality
-- **29/29 release tests pass** (full endpoint matrix + failure paths) against the
-  production Waitress server, including graceful degradation for Gemini/AbuseIPDB
-  outages and SQLite lock contention.
-
-## What's in this release
-See [RELEASE_NOTES_v1.0.md](RELEASE_NOTES_v1.0.md) for the full feature list,
-security improvements, RC1+RC2 hardening summary, known limitations, and roadmap.
-
 ## Known limitations
-Single-node SQLite (WAL + busy-timeout), polling-based real-time delivery,
-single-file frontend bundle (>500 kB), in-memory rate limiter. See release notes.
+Desktop-first UI, demo-scale data, ADMIN-provisioned users (no self-service
+registration / password reset), offline-only Recall@K, single-node SQLite,
+polling-based delivery. See [RELEASE_NOTES_v1.0.md](RELEASE_NOTES_v1.0.md).
 
 ---
 *Built by Hemanth A R.*

@@ -12,20 +12,22 @@ touched, and whether the attack succeeded.
 ---
 
 ### Built with
-Python · Flask · React · ChromaDB (vector search) · SentenceTransformers ·
-Google Gemini (RAG) · SQLite · JWT auth · Docker.
+Python · Flask · React 19 + TypeScript · ChromaDB (vector search) ·
+SentenceTransformers · Google Gemini (RAG, rule-based fallback) · SQLite · JWT auth ·
+Docker · GitHub Actions CI.
 
 ### Highlights at a glance
 - **Retrieval-Augmented Generation** that grounds LLM answers in retrieved log
   evidence, with a deterministic fallback so it never hard-fails.
 - **Automated IOC extraction, correlation, and MITRE ATT&CK mapping** with attack
   timeline and graph reconstruction.
-- **Real-time monitoring** (alerts + live ingestion) and a **retrieval-evaluation
-  dashboard** measuring search quality and latency.
-- **Production-grade:** JWT/RBAC, input validation, hardened secrets,
-  WSGI server, and one-command Docker deployment.
-- **Tested:** 29/29 endpoint and failure-path checks pass against the production
-  server, including third-party-outage degradation.
+- **Case management with an append-only audit trail** and **real-time monitoring**
+  (alerts + live ingestion, severity/acked filters).
+- **RAG Evaluation** — live per-stage latency + ranked chunks, plus an offline
+  Recall@K / MRR benchmark — and **dashboard analytics** (real-data IOC/alert-type
+  distributions).
+- **Production-grade:** JWT/RBAC, input validation, hardened secrets, WSGI server,
+  CI on every PR, and one-command Docker deployment.
 
 ### Skills demonstrated
 Applied GenAI / RAG · vector databases · API & auth design · security-domain
