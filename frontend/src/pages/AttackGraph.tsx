@@ -49,6 +49,23 @@ const IOC_ICON: Record<string, typeof Globe> = {
   ip: Globe, ipv6: Globe, domain: LinkIcon, url: LinkIcon, hash: Hash, cve: ShieldAlert, email: AtSign,
 }
 
+// Friendly labels for the backend's correlation roles/categories, so a node
+// reads as "Attacker" / "C2 Server" rather than the raw ATTACKER_IP token.
+const ROLE_LABEL: Record<string, string> = {
+  ATTACKER_IP: 'Attacker',
+  C2_IP: 'C2 Server',
+  INTERNAL_HOST: 'Internal Host',
+  TARGET_HOST: 'Target Host',
+  VICTIM: 'Victim',
+  OBSERVED: 'Observed',
+  VULNERABILITY: 'Vulnerability',
+  MALWARE: 'Malware',
+  DOMAIN: 'Domain',
+  URL: 'URL',
+}
+const roleLabel = (r?: string) =>
+  !r ? '' : ROLE_LABEL[r] ?? r.replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase())
+
 /* ---------------------------------------------------- custom nodes (themed, mono) */
 const HSTYLE: React.CSSProperties = { opacity: 0, width: 1, height: 1, minWidth: 1, minHeight: 1, border: 0, background: 'transparent' }
 function NodeHandles() {
@@ -68,7 +85,7 @@ function NodeHandles() {
 
 function UploadNode({ data }: NodeProps<SRNode>) {
   return (
-    <div className="rounded-md border-2 px-3 py-2 font-mono card-shadow" style={{ borderColor: '#22C55E', background: '#0B0B0B', width: 168 }}>
+    <div className="rounded-md border-2 px-3 py-2 font-mono card-shadow" style={{ borderColor: '#22C55E', background: '#0B0B0B', width: 168 }} title={`Ingested log — ${data.label}`}>
       <NodeHandles />
       <div className="flex items-center gap-1.5">
         <FileText size={12} style={{ color: '#22C55E' }} />
@@ -82,23 +99,36 @@ function UploadNode({ data }: NodeProps<SRNode>) {
 function IocNode({ data }: NodeProps<SRNode>) {
   const c = data.risk_level ? riskHex(data.risk_level) : '#5A5A5A'
   const Icon = IOC_ICON[data.type] ?? Fingerprint
+  const role = roleLabel(data.role)
+  // Rich hover tooltip: classification · type · risk · value.
+  const tip = [role, (data.type || '').toUpperCase(), data.risk_level ? `${data.risk_level} risk` : '', data.label]
+    .filter(Boolean).join(' · ')
   return (
-    <div className="rounded-md border px-3 py-2 font-mono card-shadow" style={{ borderColor: `${c}aa`, background: '#0B0B0B', width: 168 }}>
+    <div className="rounded-md border px-3 py-2 font-mono card-shadow" style={{ borderColor: `${c}aa`, background: '#0B0B0B', width: 176 }} title={tip}>
       <NodeHandles />
       <div className="flex items-center gap-1.5">
         <Icon size={12} style={{ color: c }} />
         <span className="text-[9px] uppercase tracking-wider text-sr-text-tertiary">{data.type}</span>
         {data.risk_level && <span className="ml-auto text-[9px] font-semibold uppercase" style={{ color: c }}>{data.risk_level}</span>}
       </div>
-      <div className="mt-0.5 truncate text-[11px] text-sr-text" title={data.label}>{data.label}</div>
-      {data.role && <div className="truncate text-[9px] text-sr-text-tertiary">{data.role}</div>}
+      <div className="mt-1 truncate text-[11px] text-sr-text" title={data.label}>{data.label}</div>
+      {role && (
+        <div
+          className="mt-1.5 inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
+          style={{ color: c, background: `${c}1f`, border: `1px solid ${c}55` }}
+        >
+          {role}
+        </div>
+      )}
     </div>
   )
 }
 
 function TechniqueNode({ data }: NodeProps<SRNode>) {
+  const tip = [`MITRE ${data.label}`, data.tactic, data.confidence ? `${data.confidence} confidence` : '']
+    .filter(Boolean).join(' · ')
   return (
-    <div className="rounded-md border px-3 py-2 font-mono card-shadow" style={{ borderColor: '#FF7A00aa', background: '#0B0B0B', width: 150 }}>
+    <div className="rounded-md border px-3 py-2 font-mono card-shadow" style={{ borderColor: '#FF7A00aa', background: '#0B0B0B', width: 150 }} title={tip}>
       <NodeHandles />
       <div className="flex items-center gap-1.5">
         <Crosshair size={12} style={{ color: '#FF7A00' }} />
