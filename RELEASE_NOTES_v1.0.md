@@ -1,12 +1,13 @@
 # SecureRAG v1.0 — Release Notes
 
-**Release type:** Major (v1.0) — first production release candidate.
-**Status:** Feature complete · production-hardened · deployment-ready.
+**Release type:** Major (v1.0) — first complete release.
+**Status:** Feature complete · production-hardened · CI on every PR · deployment-ready.
 
 SecureRAG is an AI-powered threat-intelligence & SIEM platform that turns raw
 security logs into structured, analyst-ready intelligence: RAG retrieval, IOC
-extraction & correlation, MITRE ATT&CK mapping, attack timelines and graphs,
-case management, threat-intel enrichment, and real-time alerting.
+extraction & correlation, MITRE ATT&CK mapping, attack timelines and graphs, case
+management with an audit trail, threat-intel enrichment, retrieval-quality
+measurement, dashboard analytics, and real-time alerting.
 
 ---
 
@@ -23,28 +24,32 @@ case management, threat-intel enrichment, and real-time alerting.
 - Incident report generation.
 
 **Operations**
-- Case management: create/list/update, lifecycle status, threaded notes.
+- Case management: create/list/update, lifecycle status, threaded notes, and an
+  **append-only audit trail** (created / status / assignment / note / evidence).
 - Threat-intelligence enrichment (AbuseIPDB) with cache-first TTL.
-- Real-time monitoring: alert generation, alert acknowledgement lifecycle,
-  live dashboard polling, and live ingestion (`POST /monitor/feed`).
+- Real-time monitoring: alert generation, acknowledge lifecycle, cursor-based
+  delta polling with severity/acked filters, and live ingestion (`POST /monitor/feed`).
 
-**Evaluation (new in v1.0)**
-- Retrieval Evaluation Dashboard: ranked chunks, similarity + distance scores,
-  source evidence, and per-stage latency (embed / search / total).
+**Measurement & analytics**
+- **RAG Evaluation page** — a retrieval-only path (`POST /retrieval/eval`) showing
+  per-stage latency (embed / search / total) and ranked chunks with similarity and
+  distance, alongside the offline Recall@K / MRR benchmark (clearly labeled, not live).
+- **Dashboard analytics** — KPI readouts plus real-data distribution charts (IOC
+  type donut, alert type bar) and command-center drill-ins.
 
 **Platform**
 - JWT auth (access + refresh) with ADMIN / ANALYST roles and login rate limiting.
-- React (Vite) SOC console; Flask REST API.
+- React 19 + TypeScript (Vite) SOC console; Flask REST API.
 
 ---
 
 ## Architecture
 
 ```
-React SPA (Vite)  --JWT-->  Flask API  -->  intelligence/ pipeline  -->  SQLite (WAL)
-                                        -->  rag/ (chunk, embed)      -->  ChromaDB
-                                        -->  Gemini (LLM, fallback)
-                                        -->  AbuseIPDB (threat intel)
+React 19 + TS SPA (Vite)  --JWT-->  Flask API  -->  intelligence/ pipeline  -->  SQLite (WAL)
+                                                -->  rag/ (chunk, embed)      -->  ChromaDB
+                                                -->  Gemini (LLM, fallback)
+                                                -->  AbuseIPDB (threat intel)
 ```
 
 Ingestion is centralized in `intelligence/ingest.ingest_text()` and shared by
@@ -54,67 +59,77 @@ Ingestion is centralized in `intelligence/ingest.ingest_text()` and shared by
 text -> chunk -> embed -> ChromaDB -> SQLite{IOCs, MITRE, timeline} -> correlate -> alerts
 ```
 
-See [demo/ARCHITECTURE.md](demo/ARCHITECTURE.md) for full diagrams.
+See [docs/ARCHITECTURE_DIAGRAMS.md](docs/ARCHITECTURE_DIAGRAMS.md) for the full
+Mermaid diagram set.
+
+---
+
+## Development Phases (what shipped)
+
+**Backend hardening**
+- Fail-closed JWT secret (≥32 chars, no placeholders); weak `DEFAULT_ADMIN_PASSWORD`
+  ignored and replaced by a printed-once random password.
+- Secret hygiene (removed a leaked key from `.env.example`); generic 500 responses;
+  input-size limits (query / `top_k` / feed); per-IP login rate limiting.
+- SQLite WAL + busy-timeout for write contention; correct `google-genai` dependency
+  and UTF-8 `requirements.txt`.
+- Production WSGI (Waitress/gunicorn) with `wsgi.py` / `run_production.py`; Docker +
+  Docker Compose with a persistent volume for SQLite + Chroma.
+- **CI** (GitHub Actions): ruff + pytest on every push and PR (Python 3.11).
+
+**Phase A — Case actions & audit trail**
+- Case lifecycle actions (status/assignment), threaded notes, and an append-only
+  `case_audit` history surfaced in the case detail view.
+
+**Phase B — Honesty pass**
+- Removed dead/placeholder UI; fixed misleading readouts (e.g. Critical Cases now
+  counts real critical-severity cases); real external links.
+
+**Phase C — Real Attack Graph**
+- Attack graph rendered from persisted relationships for a selected upload
+  (`GET /attack-graph`), with themed React Flow nodes/edges and a legend.
+
+**Phase D1 — Live Monitoring UX**
+- "next refresh in Ns" countdown, "updated Ns ago" ticker, new-alert row flash,
+  and connection state (Connected / Connection lost).
+
+**Phase D2 — RAG Evaluation page**
+- Surfaces `POST /retrieval/eval` as instrumentation: live latency + ranked chunks,
+  with the offline Recall@K / MRR benchmark shown separately and clearly labeled.
+
+**Phase D3 — Dashboard analytics & command-center UX**
+- Hero shrink + KPI cards lifted into normal flow as clickable drill-ins; real-data
+  IOC-type donut and alert-type bar; "Dashboard updated Ns ago"; Live Monitoring
+  severity/acked filters. Deliberately no time-series (bursty demo data would look
+  fabricated).
 
 ---
 
 ## Security Improvements
 
-- **Fail-closed JWT secret:** the app refuses to start without a strong
-  `JWT_SECRET_KEY` (≥32 chars, no known placeholders).
-- **No weak admin defaults:** a weak `DEFAULT_ADMIN_PASSWORD` is ignored and a
-  strong random password is generated and printed once.
-- **Secret hygiene:** real keys removed from `.env.example`; secrets live only in
-  the gitignored `server/.env`.
-- **Generic error responses:** internal exceptions are no longer leaked to
-  clients (logged server-side only).
-- **Input validation limits:** bounds on query length, `top_k`, and feed payload
-  size; role checks on every endpoint.
-- **Login rate limiting** per client IP.
-- **Deployment-ready CORS:** comma-separated allow-list of front-end origins.
-
----
-
-## RC1 Hardening Work
-
-- Sanitized `.env.example` (removed leaked API key).
-- Fixed `requirements.txt` encoding (UTF-16 → UTF-8) and corrected the Google
-  SDK dependency (`google-genai`); pinned all versions.
-- Strong JWT secret enforcement and strong admin-credential defaults.
-- SQLite `busy_timeout` / connection timeout to handle concurrent writers.
-- Generic 500 responses; query/`top_k`/feed validation limits.
-- Comprehensive README, demo package, and architecture documentation.
-- Retrieval Evaluation Dashboard (endpoint + UI).
-
-## RC2 Production Readiness
-
-- Production WSGI server (Waitress, cross-platform; gunicorn for Linux) with
-  `wsgi.py` and `run_production.py` entrypoints.
-- Docker deployment: backend + frontend images, `docker-compose.yml` with a
-  persistent volume for SQLite + Chroma.
-- Verified production frontend build (root-relative assets, configurable API URL).
-- **Release test sweep — 29/29 checks passed** against the live Waitress server:
-  - Auth (register, login, refresh), full investigation pipeline, operations
-    (threat intel, alerts + ack, monitor feed, cases, notes, reports), and
-    evaluation (retrieval, similarity, latency).
-  - Failure paths: invalid/expired JWT, empty & oversized & malformed payloads,
-    missing auth, threat-intel + Gemini graceful degradation, SQLite lock wait.
+- **Fail-closed JWT secret**, **no weak admin defaults**, **secret hygiene**
+  (real keys only in gitignored `server/.env`).
+- **Generic error responses** (internals logged server-side only).
+- **Input validation limits** and **role checks on every endpoint**.
+- **Login rate limiting** per client IP; **deployment-ready CORS** allow-list.
 
 ---
 
 ## Known Limitations
 
-- **Single-node SQLite.** WAL + `busy_timeout` handle modest concurrency; very
-  high-throughput multi-writer workloads should migrate to Postgres.
-- **Correlation recompute.** Global IOC correlation is recomputed per ingest
-  (O(n) in total IOCs); fine at demo/SOC scale, not yet windowed.
-- **Real-time delivery is polling** (~10s); SSE/WebSocket is on the roadmap.
-- **Frontend is a single-file SPA** (`App.jsx`); the JS bundle exceeds 500 kB
-  (no code-splitting yet).
-- **In-memory rate limiter** (per process); multi-worker needs a shared store.
-- **`VIEWER` role is reserved** but not yet granted endpoints; ADMIN/ANALYST are
-  the functional roles.
-- **No CI pipeline yet** — the test sweep is run manually (documented).
+- **Desktop-first UI** — fixed max-width with a sidebar; not mobile-optimized.
+- **Demo-scale data** — distributions are real but small.
+- **ADMIN-provisioned users** — no self-service registration; no password reset.
+- **Recall@K / MRR are offline-only** (`server/eval/recall_eval.py`); the live
+  `/retrieval/eval` returns latency + ranked chunks, and its `recall_at_k` field is
+  always `null` (forward hook).
+- **No time-series analytics** — bursty ingest data would render misleadingly sparse.
+- **No per-upload MITRE/timeline read endpoint**; **no upload management** (list/delete).
+- **Single-node SQLite** (WAL + busy-timeout); global IOC correlation recomputed per
+  ingest (O(n), not yet windowed).
+- **Polling real-time delivery** (~10s); **in-memory rate limiter** (per process).
+- **JS bundle >500 kB** (no route-level code-splitting yet).
+- **`VIEWER` role reserved** but not yet granted endpoints.
 - **History note:** the initial commit contained a Gemini API key; it must be
   rotated/revoked (sanitized going forward, but present in git history).
 
@@ -122,13 +137,13 @@ See [demo/ARCHITECTURE.md](demo/ARCHITECTURE.md) for full diagrams.
 
 ## Future Roadmap
 
-- Push delivery via SSE (cursor maps to `Last-Event-ID`) / WebSocket.
-- Frontend component split + route-level code-splitting.
-- Redis-backed rate limiting and multi-worker deployment.
-- Ground-truth **Recall@K** evaluation (response hook already present).
-- CI pipeline with an automated pytest/integration suite.
-- Wire the read-only `VIEWER` role.
-- Optional Postgres backend for higher concurrency.
+- Upload management (view/delete uploads).
+- A Dashboard "RAG Health" summary card (latency-based).
+- Ground-truth **live Recall@K** scoring (response hook already present).
+- Per-upload MITRE/timeline read endpoints; richer report exports.
+- Push delivery via SSE (cursor → `Last-Event-ID`) / WebSocket.
+- Wire the read-only `VIEWER` role; Redis-backed rate limiting; route-level
+  code-splitting; optional Postgres backend for higher concurrency.
 
 ---
 

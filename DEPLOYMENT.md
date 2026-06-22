@@ -32,9 +32,12 @@ a strong random password is generated and printed once in the logs — save it.
 ```bash
 cd frontend
 npm install
-# frontend/.env.local -> VITE_API_BASE_URL=http://127.0.0.1:5000
-npm run dev              # Vite dev server on http://localhost:5173
+npm run dev              # Vite dev server on http://localhost:3000
 ```
+In development the Vite dev server proxies `/api` → `http://localhost:5000`, so the
+SPA talks to the backend same-origin — `VITE_API_BASE_URL` is **not** needed and
+CORS is not exercised. (`frontend/.env.local` is empty by default; set
+`VITE_API_BASE_URL` only for production builds — see §2.)
 
 ---
 

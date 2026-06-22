@@ -9,12 +9,28 @@ deployment, and key state machines. (GitHub renders Mermaid natively.)
 
 ```mermaid
 flowchart LR
-  analyst([SOC Analyst]) -->|browser| SPA[React SPA]
+  analyst([SOC Analyst]) -->|browser| SPA["React SPA (App.tsx)"]
   SPA -->|REST + JWT| API[Flask API]
   API --> GEM[(Google Gemini)]
   API --> ABDB[(AbuseIPDB)]
   API --> SQL[(SQLite WAL)]
   API --> CHR[(ChromaDB)]
+```
+
+### System overview (subsystems)
+
+```mermaid
+flowchart LR
+  USER([User]) --> FE["React Frontend (Vite, App.tsx)"]
+  FE -->|REST + JWT| BE[Flask API]
+  BE --> CHR[ChromaDB Retrieval]
+  BE --> SQL[SQLite Storage]
+  BE --> IOCX[IOC Extraction]
+  BE --> IOCC[IOC Correlation]
+  BE --> MIT[MITRE Mapping]
+  BE --> TL[Timeline Generation]
+  BE --> GEM[Gemini Analysis]
+  BE --> EVAL[RAG Evaluation]
 ```
 
 ---
@@ -24,7 +40,7 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph Frontend
-    APP["App.jsx (Vite SPA)"]
+    APP["App.tsx (React 19 + TS, Vite SPA)\ndashboard · AI investigation · ingest · IOC explorer\nIOC enrichment · MITRE · timeline · attack graph\ncases · reports · live monitoring · RAG evaluation"]
   end
   subgraph Backend["Flask backend (server/)"]
     AUTH["auth_bp /auth\nlogin · refresh · register\nrate limiting"]

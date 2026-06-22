@@ -167,6 +167,31 @@ Embedding dominates (~18–220 ms depending on warm/cold model) while vector sea
 is single-digit ms — which correctly points optimization at embedding (batching,
 caching, a faster model) rather than the vector store.
 
+**Q. So where do the Recall@K / MRR numbers come from — are they live?**
+No, and the UI is explicit about that. Recall@K / MRR require ground-truth labels,
+which the live store doesn't have, so they're measured **offline** by
+`server/eval/recall_eval.py` against a labeled 30-chunk / 10-query set and surfaced
+on the RAG Evaluation page as a clearly-labeled benchmark. The live endpoint returns
+only what it can honestly compute — per-stage latency and ranked chunks — and its
+`recall_at_k` field is a forward hook that is always `null`. The page never presents
+the benchmark numbers as live.
+
+---
+
+## Dashboard Analytics
+
+**Q. What's on the dashboard and where does the data come from?**
+KPI readouts (`GET /stats`) plus two real-data distribution charts: an IOC-type
+donut (grouping `POST /correlate` indicators by type) and an alert-type bar
+(grouping `GET /alerts` by `alert_type`). The KPI cards are command-center drill-ins
+to the relevant pages. All values trace to real endpoint fields — nothing is seeded.
+
+**Q. Why no time-series / trend charts?**
+At demo scale the ingest and alert data is bursty (clustered QA sessions), so a
+real time-series would render as a few sparse spikes that *look* fabricated. We
+deliberately ship honest distributions over the full dataset instead of a
+misleading trend line — a deliberate call documented in the dashboard audit.
+
 ---
 
 ## Production & System Design
@@ -184,9 +209,9 @@ without a strong (≥32-char, non-placeholder) `JWT_SECRET_KEY`.
 
 **Q. Biggest limitations and how you'd address them?**
 Single-node SQLite (→ Postgres), per-ingest global correlation recompute
-(→ windowed), polling delivery (→ SSE), a single-file frontend bundle (→ component
-split + code-splitting), and in-memory rate limiting (→ Redis for multi-worker).
-All are tracked in the release notes' roadmap.
+(→ windowed), polling delivery (→ SSE), a JS bundle >500 kB (→ route-level
+code-splitting), and in-memory rate limiting (→ Redis for multi-worker). All are
+tracked in the release notes' roadmap.
 
 **Q. How do you know it works?**
 A 29-check release sweep (full endpoint matrix + failure paths: invalid/expired
