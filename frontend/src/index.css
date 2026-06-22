@@ -172,3 +172,27 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+
+/* --- Print / Save-as-PDF: isolate the incident report on a light, paginated page.
+   Severity accents are applied via inline styles, so they survive these overrides;
+   only the neutral sr-* surfaces/text are flipped to ink-friendly light tones. --- */
+@media print {
+  body * { visibility: hidden !important; }
+  #incident-report, #incident-report * { visibility: visible !important; }
+  #incident-report {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #111111 !important;
+  }
+  #incident-report [class*="bg-sr-"] { background: #ffffff !important; }
+  #incident-report [class*="text-sr-text"] { color: #111111 !important; }
+  #incident-report [class*="border-sr-"] { border-color: #d4d4d4 !important; }
+  #incident-report table { border-collapse: collapse; }
+  #incident-report .ir-section { break-inside: avoid; }
+  .no-print { display: none !important; }
+  @page { margin: 14mm; }
+}
