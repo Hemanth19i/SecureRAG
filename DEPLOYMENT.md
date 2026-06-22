@@ -149,6 +149,62 @@ Frontend: `VITE_API_BASE_URL` (build-time) — backend base URL.
 
 ---
 
+## 6. Cloud deployment (Render & Railway)
+
+These PaaS hosts run the **Dockerfiles directly** (not `docker-compose.yml`), so the
+compose-only bits — the `working_dir: /data` override and the `backend` service
+hostname — must be reproduced via config. Read the **Persistent storage** note below
+first; it's the one thing that's easy to get wrong.
+
+### Render
+
+**Backend** — *Web Service* from `server/Dockerfile`:
+- Add a **Persistent Disk** (≈1 GB) mounted at `/data`.
+- **Start command:** `sh -c "cd /data && python /app/run_production.py"` — the SQLite
+  DB defaults to `./securerag.db` (relative to CWD), so the process must run from the
+  mounted disk (this mirrors compose's `working_dir: /data`).
+- **Env:** `JWT_SECRET_KEY` (required), `DEFAULT_ADMIN_PASSWORD` (set a known strong
+  value so you can log in), `CHROMA_DB_PATH=/data/chroma_store`, `GEMINI_API_KEY` and
+  `ABUSEIPDB_API_KEY` (optional), `CORS_ORIGINS=https://<your-frontend-url>`.
+
+**Frontend** — pick one:
+- **A. Static Site** (simplest): root `frontend`, build `npm ci && npm run build`,
+  publish `dist`. Set build env `VITE_API_BASE_URL=https://<backend-url>` (no trailing
+  slash). Then set the backend's `CORS_ORIGINS` to this site's URL. *(Cross-origin via
+  CORS — does not use the nginx proxy.)*
+- **B. Docker Web Service** (keeps the same-origin `/api` model): from
+  `frontend/Dockerfile`. Edit `frontend/nginx.conf`'s `proxy_pass` from
+  `http://backend:5000/` to the backend's Render internal address
+  (`http://<backend-service-name>:5000/`).
+
+### Railway
+
+- **Backend:** service from `server/Dockerfile`; attach a **Volume** at `/data`; set the
+  start command `cd /data && python /app/run_production.py`; same env vars +
+  `CHROMA_DB_PATH=/data/chroma_store`.
+- **Frontend:** service from `frontend/Dockerfile`. Railway's private networking lets
+  nginx reach the backend at `http://<backend-service>.railway.internal:5000` — set
+  `proxy_pass` to that. Or use the static-site + `VITE_API_BASE_URL` + CORS model (Render
+  option A).
+
+### Persistent storage (both)
+
+`securerag.db` and `chroma_store/` **must** live on the mounted disk/volume or they reset
+on every redeploy. The SQLite path is **not** env-configurable (hardcoded
+`./securerag.db`), so run the backend with its working directory set to the mounted path
+(the `cd /data && …` start command). Set `CHROMA_DB_PATH=/data/chroma_store`.
+
+### Known limitations (cloud)
+
+- The embedding model loads on first request → **slow cold starts** on small instances
+  (and after free-tier idle/sleep). A warmup ping helps.
+- Single SQLite instance → run **one backend replica** (don't scale horizontally).
+- The in-memory login rate-limiter resets when the instance sleeps/restarts.
+- The bundled `nginx.conf` targets the compose service name `backend`; cloud deploys
+  need the platform's internal hostname (above) or the static-site + CORS model.
+
+---
+
 ## Pre-deployment checklist
 
 - [ ] Strong `JWT_SECRET_KEY` set (not a placeholder).

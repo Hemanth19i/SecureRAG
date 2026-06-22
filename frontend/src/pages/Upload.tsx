@@ -17,6 +17,20 @@ export default function Upload() {
 
   const isAdmin = role === 'ADMIN'
 
+  // The backend ingests plain UTF-8 text and decodes uploads as UTF-8. Validate
+  // client-side so a binary / non-UTF-8 file gets a friendly message instead of
+  // being sent and failing server-side. Returns an error string, or null if OK.
+  const validateTextFile = async (f: File): Promise<string | null> => {
+    if (f.size === 0) return 'This file is empty — there’s nothing to ingest.'
+    try {
+      const buf = await f.arrayBuffer()
+      new TextDecoder('utf-8', { fatal: true }).decode(buf)
+      return null
+    } catch {
+      return 'This file isn’t valid UTF-8 text. SecureRAG ingests plain-text logs (e.g. .log, .txt) — binary or non-UTF-8 files can’t be parsed.'
+    }
+  }
+
   const pick = (f: File | null) => {
     setFile(f)
     setResult(null)
@@ -31,6 +45,12 @@ export default function Upload() {
     setDuplicate(null)
     setResult(null)
     try {
+      const invalid = await validateTextFile(file)
+      if (invalid) {
+        setError(invalid)
+        toast.error('Unsupported file', { description: invalid })
+        return
+      }
       const res = await uploadLog(file)
       setResult({ chunks: res.chunks_stored })
       toast.success('File ingested', { description: `${res.chunks_stored} chunks stored` })

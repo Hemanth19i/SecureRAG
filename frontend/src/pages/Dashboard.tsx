@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { TrendingUp, AlertTriangle, Loader2, ArrowRight, ArrowUpRight, FileText, Database, RefreshCw } from 'lucide-react'
 import { useNavigate } from 'react-router'
-import HeroCanvas from '@/components/HeroCanvas'
+// Decorative hero — lazy so three.js loads after first paint, off the landing
+// route's critical path (the KPIs/charts render immediately).
+const HeroCanvas = lazy(() => import('@/components/HeroCanvas'))
 import IocTypeDonut from '@/components/charts/IocTypeDonut'
 import AlertTypeBar from '@/components/charts/AlertTypeBar'
 import { fetchStats, fetchCases, fetchAlerts, fetchCorrelation } from '@/lib/api'
@@ -68,7 +70,7 @@ export default function Dashboard() {
     <div className="pb-8">
       {/* Compact hero — the particle banner sets the tone without owning the fold. */}
       <section className="relative" style={{ height: '32vh', minHeight: 220 }}>
-        <HeroCanvas />
+        <Suspense fallback={null}><HeroCanvas /></Suspense>
         <div
           className="pointer-events-none absolute inset-0"
           style={{ background: 'linear-gradient(transparent 30%, #050505 100%)', zIndex: 2 }}
