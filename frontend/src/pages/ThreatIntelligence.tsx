@@ -32,10 +32,43 @@ export default function ThreatIntelligence() {
 
   const verdict = result?.verdict
   const verdictColor = verdict ? sevHex(String(verdict)) : '#8A8A8A'
-  // Raw fields beyond the headline ones.
-  const extra = result
-    ? Object.entries(result).filter(([k]) => !['status', 'verdict', 'abuse_confidence'].includes(k))
-    : []
+  const resStatus = String(result?.status ?? '')
+
+  // The provider's real detail fields live nested under `enrichment_data`; surface
+  // them as labeled rows (only the ones actually populated — no null dumps).
+  const ed =
+    result && typeof result.enrichment_data === 'object' && result.enrichment_data
+      ? (result.enrichment_data as Record<string, unknown>)
+      : {}
+  const FIELD_LABELS: [string, string][] = [
+    ['country_code', 'Country'],
+    ['isp', 'ISP'],
+    ['domain', 'Domain'],
+    ['usage_type', 'Usage type'],
+    ['total_reports', 'Total reports'],
+    ['last_reported_at', 'Last reported'],
+    ['is_tor', 'Tor exit node'],
+  ]
+  const dataFields = FIELD_LABELS
+    .map(([k, label]) => [label, ed[k]] as const)
+    .filter(([, v]) => v != null && v !== '')
+
+  // Honest, context-specific explanations for non-OK backend states (never invent data).
+  const STATUS_HELP: Record<string, { title: string; detail: string }> = {
+    unavailable: {
+      title: 'Enrichment provider not configured',
+      detail: 'Set ABUSEIPDB_API_KEY in server/.env to enable IP reputation lookups, then retry.',
+    },
+    unsupported: {
+      title: 'Indicator type not supported',
+      detail: 'Reputation enrichment currently covers public IP addresses (IPv4/IPv6) only.',
+    },
+    error: {
+      title: 'Provider lookup failed',
+      detail: 'The threat-intel provider could not be reached. This is a transient issue — try again shortly.',
+    },
+  }
+  const statusHelp = resStatus !== 'ok' ? STATUS_HELP[resStatus] : undefined
 
   return (
     <div className="mx-auto max-w-[900px] p-8">
@@ -109,7 +142,18 @@ export default function ThreatIntelligence() {
             )}
           </div>
           <div className="space-y-5 p-5">
-            {typeof result.abuse_confidence === 'number' && (
+            {/* Honest empty/degraded state — no fabricated data */}
+            {statusHelp && (
+              <div className="flex items-start gap-2 rounded-lg border border-sr-border bg-sr-elevated px-4 py-3">
+                <ShieldAlert size={15} className="mt-0.5 shrink-0 text-sr-text-tertiary" />
+                <div>
+                  <div className="text-sm font-medium text-sr-text">{statusHelp.title}</div>
+                  <div className="mt-0.5 text-xs text-sr-text-secondary">{statusHelp.detail}</div>
+                </div>
+              </div>
+            )}
+
+            {resStatus === 'ok' && typeof result.abuse_confidence === 'number' && (
               <div>
                 <div className="mb-1.5 flex items-center justify-between text-xs">
                   <span className="uppercase tracking-wider text-sr-text-secondary">Abuse confidence</span>
@@ -120,17 +164,25 @@ export default function ThreatIntelligence() {
                 </div>
               </div>
             )}
-            {extra.length > 0 ? (
+
+            {dataFields.length > 0 && (
               <div className="grid grid-cols-2 gap-3">
-                {extra.map(([k, v]) => (
-                  <div key={k} className="rounded border border-sr-border bg-sr-elevated px-3 py-2">
-                    <div className="text-[10px] uppercase text-sr-text-tertiary">{k.replace(/_/g, ' ')}</div>
-                    <div className="truncate font-mono text-xs text-sr-text">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</div>
+                {dataFields.map(([label, v]) => (
+                  <div key={label} className="rounded border border-sr-border bg-sr-elevated px-3 py-2">
+                    <div className="text-[10px] uppercase text-sr-text-tertiary">{label}</div>
+                    <div className="truncate font-mono text-xs text-sr-text">
+                      {typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v)}
+                    </div>
                   </div>
                 ))}
               </div>
-            ) : (
-              <p className="text-xs text-sr-text-tertiary">No additional fields returned (status: {String(result.status)}).</p>
+            )}
+
+            {result.source != null && resStatus === 'ok' && (
+              <p className="text-[11px] text-sr-text-tertiary">
+                Source: <span className="font-mono text-sr-text-secondary">{String(result.source)}</span>
+                {result.cached === true ? ' · cached' : ''}
+              </p>
             )}
           </div>
         </div>

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { UploadCloud, FileText, Loader2, CheckCircle2, AlertTriangle, ShieldAlert } from 'lucide-react'
+import { UploadCloud, FileText, Loader2, CheckCircle2, AlertTriangle, ShieldAlert, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { uploadLog, ApiError } from '@/lib/api'
@@ -12,6 +12,7 @@ export default function Upload() {
   const [dragOver, setDragOver] = useState(false)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<{ chunks: number } | null>(null)
+  const [duplicate, setDuplicate] = useState<string | null>(null)
   const [error, setError] = useState('')
 
   const isAdmin = role === 'ADMIN'
@@ -19,6 +20,7 @@ export default function Upload() {
   const pick = (f: File | null) => {
     setFile(f)
     setResult(null)
+    setDuplicate(null)
     setError('')
   }
 
@@ -26,6 +28,7 @@ export default function Upload() {
     if (!file) return
     setBusy(true)
     setError('')
+    setDuplicate(null)
     setResult(null)
     try {
       const res = await uploadLog(file)
@@ -33,9 +36,22 @@ export default function Upload() {
       toast.success('File ingested', { description: `${res.chunks_stored} chunks stored` })
       setFile(null)
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : 'Upload failed — is the backend running?'
-      setError(msg)
-      toast.error('Upload failed', { description: msg })
+      // A 409 isn't a failure — it's the SHA-256 dedup confirming this exact file
+      // is already in the system. Surface it as an informational state the analyst
+      // can act on, not a red error.
+      if (err instanceof ApiError && err.status === 409) {
+        const uid = (err.data as { upload_id?: string } | null)?.upload_id
+        setDuplicate(
+          uid
+            ? `This exact file is already ingested (upload ${uid.slice(0, 8)}). Nothing new was stored.`
+            : 'This exact file is already ingested. Nothing new was stored.',
+        )
+        toast('Already ingested', { description: 'This file is already in the system — no duplicate created.' })
+      } else {
+        const msg = err instanceof ApiError ? err.message : 'Upload failed — is the backend running?'
+        setError(msg)
+        toast.error('Upload failed', { description: msg })
+      }
     } finally {
       setBusy(false)
     }
@@ -119,6 +135,17 @@ export default function Upload() {
         <div className="flex items-center gap-2 rounded-lg border border-sr-green/30 bg-sr-green/10 px-4 py-3 text-sm text-sr-green">
           <CheckCircle2 size={15} className="shrink-0" />
           Ingested successfully — {result.chunks} chunks stored and indexed.
+        </div>
+      )}
+      {duplicate && (
+        <div className="flex items-start gap-2 rounded-lg border border-sr-blue/30 bg-sr-blue/10 px-4 py-3 text-sm text-sr-blue">
+          <Info size={15} className="mt-0.5 shrink-0" />
+          <div>
+            {duplicate}
+            <div className="mt-1 text-xs text-sr-text-tertiary">
+              Duplicate detection is working as intended — pick a different file to ingest new evidence.
+            </div>
+          </div>
         </div>
       )}
       {error && (
