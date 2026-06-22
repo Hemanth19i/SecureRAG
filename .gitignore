@@ -27,3 +27,6 @@ frontend-claude-archive/
 # Node / frontend build artifacts
 node_modules/
 frontend/dist/
+
+.claude/
+graphify-out/
