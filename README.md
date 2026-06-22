@@ -1,5 +1,7 @@
 # SecureRAG
 
+[![CI](https://github.com/Hemanth19i/SecureRAG/actions/workflows/ci.yml/badge.svg)](https://github.com/Hemanth19i/SecureRAG/actions/workflows/ci.yml)
+
 **AI-powered threat-intelligence & SIEM platform.** Ingest security logs, retrieve
 relevant evidence with RAG, and automatically extract IOCs, correlate them, map to
 MITRE ATT&CK, build attack timelines and graphs, manage cases with an audit trail,
