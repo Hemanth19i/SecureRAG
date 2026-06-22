@@ -15,6 +15,10 @@ export default function LiveMonitoring() {
   const [lastPollAt, setLastPollAt] = useState<number | null>(null)   // anchors "next refresh in Ns"
   const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null) // anchors "updated Ns ago"
   const [flashIds, setFlashIds] = useState<Set<number>>(new Set())    // genuinely-new alert_ids to highlight
+  // Client-side filters over already-polled alerts — no extra requests, and the
+  // D1 poll/countdown/flash/connection logic above is untouched.
+  const [sevFilter, setSevFilter] = useState<string>('ALL')
+  const [ackFilter, setAckFilter] = useState<'ALL' | 'UNACKED' | 'ACKED'>('ALL')
   const cursorRef = useRef(0)
   const firstLoadRef = useRef(true)
   const flashTimer = useRef<number | null>(null)
@@ -65,6 +69,15 @@ export default function LiveMonitoring() {
   }
 
   const unacked = alerts.filter((a) => !a.acknowledged).length
+  // Severity levels actually present in the polled data — no dead filter buttons.
+  const severities = Array.from(new Set(alerts.map((a) => String(a.severity || '').toUpperCase()).filter(Boolean)))
+    .sort((a, b) => (a === 'CRITICAL' ? -1 : b === 'CRITICAL' ? 1 : a.localeCompare(b)))
+  const visibleAlerts = alerts.filter((a) => {
+    const matchSev = sevFilter === 'ALL' || String(a.severity || '').toUpperCase() === sevFilter
+    const matchAck = ackFilter === 'ALL' || (ackFilter === 'ACKED' ? a.acknowledged : !a.acknowledged)
+    return matchSev && matchAck
+  })
+  const filtersActive = sevFilter !== 'ALL' || ackFilter !== 'ALL'
   const agoSec = lastSuccessAt != null ? Math.max(0, Math.floor((nowMs - lastSuccessAt) / 1000)) : null
   const nextInSec = lastPollAt != null ? Math.max(0, Math.ceil((lastPollAt + POLL_MS - nowMs) / 1000)) : null
 
@@ -115,9 +128,26 @@ export default function LiveMonitoring() {
 
       {/* Live alert stream */}
       <div className="overflow-hidden rounded-lg border border-sr-border bg-sr-surface card-shadow">
-        <div className="flex items-center justify-between border-b border-sr-border p-5">
-          <h2 className="text-sm font-semibold text-sr-text">Live Alert Stream</h2>
-          <span className="font-mono text-[11px] text-sr-text-tertiary">{unacked} unacked</span>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-sr-border p-5">
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-semibold text-sr-text">Live Alert Stream</h2>
+            <span className="font-mono text-[11px] text-sr-text-tertiary">
+              {filtersActive ? `${visibleAlerts.length} of ${alerts.length} · ` : ''}{unacked} unacked
+            </span>
+          </div>
+          {/* Filters over already-polled data (no extra requests) */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <FilterBtn active={sevFilter === 'ALL'} onClick={() => setSevFilter('ALL')}>All</FilterBtn>
+            {severities.map((s) => (
+              <FilterBtn key={s} active={sevFilter === s} onClick={() => setSevFilter(s)} color={sevHex(normSeverity(s))}>
+                {s}
+              </FilterBtn>
+            ))}
+            <span className="mx-1 h-4 w-px bg-sr-border" />
+            <FilterBtn active={ackFilter === 'ALL'} onClick={() => setAckFilter('ALL')}>Any</FilterBtn>
+            <FilterBtn active={ackFilter === 'UNACKED'} onClick={() => setAckFilter('UNACKED')}>Unacked</FilterBtn>
+            <FilterBtn active={ackFilter === 'ACKED'} onClick={() => setAckFilter('ACKED')}>Ack'd</FilterBtn>
+          </div>
         </div>
         <div className="max-h-[460px] overflow-y-auto">
           {state === 'connecting' && alerts.length === 0 && (
@@ -128,9 +158,12 @@ export default function LiveMonitoring() {
           {state !== 'connecting' && alerts.length === 0 && (
             <p className="px-5 py-8 text-center text-sm text-sr-text-tertiary">No alerts in the feed.</p>
           )}
+          {alerts.length > 0 && visibleAlerts.length === 0 && (
+            <p className="px-5 py-8 text-center text-sm text-sr-text-tertiary">No alerts match the current filter.</p>
+          )}
           <table className="w-full">
             <tbody className="divide-y divide-sr-border">
-              {alerts.map((a) => {
+              {visibleAlerts.map((a) => {
                 const c = sevHex(normSeverity(a.severity))
                 const isNew = flashIds.has(a.alert_id)
                 return (
@@ -160,5 +193,28 @@ export default function LiveMonitoring() {
         </div>
       </div>
     </div>
+  )
+}
+
+function FilterBtn({
+  active, onClick, color, children,
+}: {
+  active: boolean
+  onClick: () => void
+  color?: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide transition-colors ${
+        active
+          ? 'border-sr-accent bg-sr-accent/10 text-sr-accent'
+          : 'border-sr-border text-sr-text-secondary hover:border-sr-border-focus hover:text-sr-text'
+      }`}
+    >
+      {color && <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle" style={{ background: color }} />}
+      {children}
+    </button>
   )
 }

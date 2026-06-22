@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Search, Loader2, AlertTriangle } from 'lucide-react'
+import { useSearchParams } from 'react-router'
+import { Search, Loader2, AlertTriangle, X } from 'lucide-react'
 import { fetchCases } from '@/lib/api'
 import type { CaseRow } from '@/lib/backend'
 import { useApiData } from '@/lib/useApi'
@@ -30,32 +31,55 @@ function SevDot({ level }: { level: string }) {
 export default function Investigations() {
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // `?severity=` drives a deep-link filter (e.g. the Dashboard "Critical Cases"
+  // KPI links here pre-filtered to critical). Cleared via the chip.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const severityFilter = (searchParams.get('severity') || '').toLowerCase()
 
   const { status, data, error, reload } = useApiData<CaseRow[]>(() => fetchCases())
   const cases = data ?? []
 
-  const filtered = cases.filter(
-    (c) =>
+  const clearSeverity = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('severity')
+    setSearchParams(next, { replace: true })
+  }
+
+  const filtered = cases.filter((c) => {
+    const matchSearch =
       c.title?.toLowerCase().includes(search.toLowerCase()) ||
       c.case_id?.toLowerCase().includes(search.toLowerCase()) ||
-      (c.assigned_to || c.created_by || '').toLowerCase().includes(search.toLowerCase()),
-  )
+      (c.assigned_to || c.created_by || '').toLowerCase().includes(search.toLowerCase())
+    const matchSeverity = !severityFilter || normSeverity(c.severity) === severityFilter
+    return matchSearch && matchSeverity
+  })
 
   return (
     <div className="mx-auto max-w-[1400px] p-8">
       <div className="mb-6 flex items-center justify-between">
-        <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-sr-text-tertiary" />
-          <input
-            type="text"
-            placeholder="Search investigations…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-72 rounded-md border border-sr-border bg-sr-surface py-2 pl-9 pr-4 text-sm text-sr-text placeholder:text-sr-text-tertiary transition-colors focus:border-sr-accent focus:outline-none"
-          />
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-sr-text-tertiary" />
+            <input
+              type="text"
+              placeholder="Search investigations…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-72 rounded-md border border-sr-border bg-sr-surface py-2 pl-9 pr-4 text-sm text-sr-text placeholder:text-sr-text-tertiary transition-colors focus:border-sr-accent focus:outline-none"
+            />
+          </div>
+          {severityFilter && (
+            <button
+              onClick={clearSeverity}
+              className="flex items-center gap-1.5 rounded-md border border-sr-accent/40 bg-sr-accent/10 px-2.5 py-1.5 text-xs text-sr-accent transition-colors hover:bg-sr-accent/20"
+            >
+              Severity: <span className="font-semibold uppercase">{severityFilter}</span>
+              <X size={12} />
+            </button>
+          )}
         </div>
         <span className="text-xs text-sr-text-tertiary">
-          Backed by saved cases · {cases.length} total
+          Backed by saved cases · {severityFilter ? `${filtered.length} of ${cases.length}` : `${cases.length} total`}
         </span>
       </div>
 
