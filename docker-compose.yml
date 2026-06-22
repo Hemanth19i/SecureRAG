@@ -20,10 +20,10 @@ services:
     restart: unless-stopped
 
   frontend:
-    build:
-      context: ./frontend
-      args:
-        VITE_API_BASE_URL: http://localhost:5000
+    # The SPA calls the backend at the relative path /api/*; nginx (see
+    # frontend/nginx.conf) reverse-proxies that to the backend container. No API
+    # URL is baked into the bundle, so the image is environment-agnostic.
+    build: ./frontend
     ports:
       - "5173:80"
     depends_on:
