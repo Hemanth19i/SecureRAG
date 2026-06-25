@@ -12,8 +12,11 @@ logger = logging.getLogger(__name__)
 CONFIDENCE_RANK_LABEL = {3: "HIGH", 2: "MEDIUM", 1: "LOW", 0: "NONE"}
 
 class SQLiteStore:
-    def __init__(self, db_path="./securerag.db"):
-        self.db_path = db_path
+    def __init__(self, db_path=None):
+        self.db_path = db_path or os.getenv(
+            "SQLITE_DB_PATH",
+            "./securerag.db"
+        )
         self._init_db()
 
     def get_connection(self):
